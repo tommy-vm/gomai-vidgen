@@ -2,9 +2,14 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 
+const MODE_OPTIONS = [
+  { value: "video", label: "AI Video" },
+  { value: "edit", label: "AI Image" },
+];
+
 const DURATION_OPTIONS = [
-  { value: "5", label: "5초", cost: "~$0.35" },
-  { value: "10", label: "10초", cost: "~$0.70" },
+  { value: "5", label: "5초" },
+  { value: "10", label: "10초" },
 ];
 
 const ASPECT_OPTIONS = [
@@ -28,6 +33,47 @@ const MODEL_OPTIONS = [
     value: "fal-ai/kling-video/v3/pro/image-to-video",
     label: "Kling V3 Pro",
     desc: "최상위 퀄리티",
+  },
+];
+
+const EDIT_MODEL_OPTIONS = [
+  {
+    value: "gpt-image-1",
+    label: "GPT Image",
+    desc: "AI 이미지 편집",
+  },
+];
+
+const EDIT_PROMPT_PRESETS = [
+  {
+    label: "의상 변경",
+    icon: "👔",
+    prompt: "Change the outfit to a navy blue business suit with a white shirt.",
+  },
+  {
+    label: "배경 교체",
+    icon: "🏖️",
+    prompt: "Change the background to a tropical beach with sunset lighting.",
+  },
+  {
+    label: "스타일 변환",
+    icon: "🎨",
+    prompt: "Transform the image into a watercolor painting style.",
+  },
+  {
+    label: "색상 변경",
+    icon: "🎨",
+    prompt: "Change the main color of the clothing to bright red.",
+  },
+  {
+    label: "계절 변경",
+    icon: "❄️",
+    prompt: "Change the scene to winter with snow falling in the background.",
+  },
+  {
+    label: "조명 변경",
+    icon: "💡",
+    prompt: "Change the lighting to warm golden hour sunlight from the left side.",
   },
 ];
 
@@ -71,19 +117,24 @@ const PROMPT_PRESETS = [
 ];
 
 const HISTORY_KEY = "gom_ai_generation_history";
+const EDIT_HISTORY_KEY = "gom_ai_edit_history";
 
 export default function Home() {
+  const [mode, setMode] = useState("video"); // video | edit
   const [image, setImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState("5");
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [model, setModel] = useState(MODEL_OPTIONS[0].value);
+  const [editModel, setEditModel] = useState(EDIT_MODEL_OPTIONS[0].value);
   const [status, setStatus] = useState("idle"); // idle | uploading | generating | polling | completed | error
   const [videoUrl, setVideoUrl] = useState(null);
+  const [editedImageUrl, setEditedImageUrl] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [progress, setProgress] = useState(0);
   const [history, setHistory] = useState([]);
+  const [editHistory, setEditHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
   const fileInputRef = useRef(null);
   const pollingRef = useRef(null);
@@ -93,6 +144,8 @@ export default function Home() {
     try {
       const saved = localStorage.getItem(HISTORY_KEY);
       if (saved) setHistory(JSON.parse(saved));
+      const editSaved = localStorage.getItem(EDIT_HISTORY_KEY);
+      if (editSaved) setEditHistory(JSON.parse(editSaved));
     } catch {}
   }, []);
 
@@ -106,6 +159,7 @@ export default function Home() {
   const handleImageSelect = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
     if (file.size > 10 * 1024 * 1024) {
       setErrorMsg("이미지 크기는 10MB 이하여야 합니다.");
       return;
@@ -113,6 +167,7 @@ export default function Home() {
     setImage(file);
     setImagePreview(URL.createObjectURL(file));
     setVideoUrl(null);
+    setEditedImageUrl(null);
     setErrorMsg("");
     setStatus("idle");
   };
@@ -128,6 +183,7 @@ export default function Home() {
       setImage(file);
       setImagePreview(URL.createObjectURL(file));
       setVideoUrl(null);
+      setEditedImageUrl(null);
       setErrorMsg("");
       setStatus("idle");
     }
@@ -142,6 +198,74 @@ export default function Home() {
       return updated;
     });
   }, []);
+
+  const saveToEditHistory = useCallback((entry) => {
+    setEditHistory((prev) => {
+      const updated = [entry, ...prev].slice(0, 50);
+      try {
+        localStorage.setItem(EDIT_HISTORY_KEY, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  }, []);
+
+  const fileToBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const handleEditImage = async () => {
+    if (!image || !prompt.trim()) {
+      setErrorMsg("이미지와 프롬프트를 모두 입력해주세요.");
+      return;
+    }
+
+    setErrorMsg("");
+    setEditedImageUrl(null);
+    setProgress(0);
+
+    try {
+      // 1. 이미지 base64 변환
+      setStatus("uploading");
+      const base64 = await fileToBase64(image);
+
+      // 2. 이미지 편집 요청 (Google Gemini)
+      setStatus("generating");
+      const editRes = await fetch("/api/edit-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_base64: base64,
+          image_mime: image.type,
+          prompt,
+          model: editModel,
+        }),
+      });
+      const editData = await editRes.json();
+      if (!editRes.ok) throw new Error(editData.error);
+
+      const dataUrl = `data:${editData.mime_type};base64,${editData.image_base64}`;
+      setEditedImageUrl(dataUrl);
+      setStatus("completed");
+      setProgress(100);
+
+      const modelLabel =
+        EDIT_MODEL_OPTIONS.find((m) => m.value === editModel)?.label || editModel;
+      saveToEditHistory({
+        id: Date.now(),
+        prompt,
+        model: modelLabel,
+        image_url: dataUrl,
+        created_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      setErrorMsg(err.message || "오류가 발생했습니다.");
+      setStatus("error");
+    }
+  };
 
   const pollStatus = useCallback((requestId, modelId, meta) => {
     let elapsed = 0;
@@ -240,9 +364,35 @@ export default function Home() {
     setImagePreview(null);
     setPrompt("");
     setVideoUrl(null);
+    setEditedImageUrl(null);
     setStatus("idle");
     setProgress(0);
     setErrorMsg("");
+  };
+
+  const handleUseAsInput = () => {
+    if (!editedImageUrl) return;
+    // data URL → File 변환
+    const [header, base64] = editedImageUrl.split(",");
+    const mime = header.match(/:(.*?);/)[1];
+    const bytes = atob(base64);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    const file = new File([arr], "edited.png", { type: mime });
+
+    setImage(file);
+    setImagePreview(editedImageUrl);
+    setEditedImageUrl(null);
+    setPrompt("");
+    setStatus("idle");
+    setProgress(0);
+    setErrorMsg("");
+  };
+
+  const handleModeSwitch = (newMode) => {
+    if (isProcessing) return;
+    handleReset();
+    setMode(newMode);
   };
 
   const isProcessing = ["uploading", "generating", "polling"].includes(status);
@@ -264,15 +414,21 @@ export default function Home() {
           <span className="text-lg font-semibold tracking-tight">
             GOM AI
           </span>
-          <span
-            className="text-xs px-2 py-0.5 rounded-full"
-            style={{
-              background: "var(--accent-glow)",
-              color: "var(--accent)",
-            }}
-          >
-            AI Video
-          </span>
+          <div className="flex ml-2 rounded-lg overflow-hidden" style={{ border: "1px solid var(--border)" }}>
+            {MODE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => handleModeSwitch(opt.value)}
+                className="px-3 py-1 text-xs font-medium transition-all"
+                style={{
+                  background: mode === opt.value ? "var(--accent)" : "transparent",
+                  color: mode === opt.value ? "#fff" : "var(--text-secondary)",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -284,28 +440,34 @@ export default function Home() {
               border: "1px solid var(--border)",
             }}
           >
-            이력 {history.length > 0 && `(${history.length})`}
+            이력 {mode === "video"
+              ? history.length > 0 && `(${history.length})`
+              : editHistory.length > 0 && `(${editHistory.length})`}
           </button>
           <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
-            {MODEL_OPTIONS.find((m) => m.value === model)?.label || "Kling"}
+            {mode === "video"
+              ? MODEL_OPTIONS.find((m) => m.value === model)?.label || "Kling"
+              : EDIT_MODEL_OPTIONS.find((m) => m.value === editModel)?.label || "Kontext"}
           </span>
         </div>
       </header>
 
       {/* Main */}
-      <main className="max-w-5xl mx-auto px-6 py-10">
-        <div className="text-center mb-10">
-          <h1 className="text-3xl font-bold tracking-tight mb-2">
-            Image → Video
+      <main className="px-6 py-6" style={{ height: "calc(100vh - 65px)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold tracking-tight mb-1">
+            {mode === "video" ? "Image → Video" : "Image → Edit"}
           </h1>
-          <p style={{ color: "var(--text-secondary)" }}>
-            이미지를 업로드하고 프롬프트를 입력하면 AI가 영상을 생성합니다
+          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+            {mode === "video"
+              ? "이미지를 업로드하고 프롬프트를 입력하면 AI가 영상을 생성합니다"
+              : "이미지를 업로드하고 편집 지시를 입력하면 AI가 이미지를 편집합니다"}
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 min-h-0">
           {/* Left: Input */}
-          <div className="space-y-5">
+          <div className="space-y-4 overflow-y-auto min-h-0" style={{ paddingRight: 4 }}>
             {/* Image Upload */}
             <div
               className="rounded-xl border-2 border-dashed p-1 transition-all cursor-pointer"
@@ -321,8 +483,8 @@ export default function Home() {
                 <img
                   src={imagePreview}
                   alt="Preview"
-                  className="w-full rounded-lg object-cover"
-                  style={{ maxHeight: 320 }}
+                  className="w-full rounded-lg"
+                  style={{ objectFit: "contain", maxHeight: "35vh" }}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center py-16">
@@ -368,13 +530,15 @@ export default function Home() {
                 className="block text-sm font-medium mb-2"
                 style={{ color: "var(--text-secondary)" }}
               >
-                모션 프롬프트
+                {mode === "video" ? "모션 프롬프트" : "편집 프롬프트"}
               </label>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 disabled={isProcessing}
-                placeholder="예: The person slowly turns their head and smiles warmly at the camera, soft natural lighting"
+                placeholder={mode === "video"
+                  ? "예: The person slowly turns their head and smiles warmly at the camera, soft natural lighting"
+                  : "예: Change the outfit to a red dress, keep everything else the same"}
                 rows={3}
                 className="w-full rounded-lg px-4 py-3 text-sm outline-none resize-none transition-all focus:ring-2"
                 style={{
@@ -386,7 +550,7 @@ export default function Home() {
               />
               {/* Prompt Presets */}
               <div className="flex flex-wrap gap-1.5 mt-2">
-                {PROMPT_PRESETS.map((preset) => (
+                {(mode === "video" ? PROMPT_PRESETS : EDIT_PROMPT_PRESETS).map((preset) => (
                   <button
                     key={preset.label}
                     onClick={() => !isProcessing && setPrompt(preset.prompt)}
@@ -413,8 +577,11 @@ export default function Home() {
                 모델
               </label>
               <select
-                value={model}
-                onChange={(e) => !isProcessing && setModel(e.target.value)}
+                value={mode === "video" ? model : editModel}
+                onChange={(e) => {
+                  if (isProcessing) return;
+                  mode === "video" ? setModel(e.target.value) : setEditModel(e.target.value);
+                }}
                 disabled={isProcessing}
                 className="w-full rounded-lg px-3 py-2 text-sm outline-none transition-all appearance-none cursor-pointer"
                 style={{
@@ -423,7 +590,7 @@ export default function Home() {
                   color: "var(--text-primary)",
                 }}
               >
-                {MODEL_OPTIONS.map((opt) => (
+                {(mode === "video" ? MODEL_OPTIONS : EDIT_MODEL_OPTIONS).map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label} — {opt.desc}
                   </option>
@@ -431,7 +598,8 @@ export default function Home() {
               </select>
             </div>
 
-            {/* Options Row */}
+            {/* Options Row — Video mode only */}
+            {mode === "video" && (
             <div className="flex gap-4">
               <div className="flex-1">
                 <label
@@ -462,8 +630,7 @@ export default function Home() {
                         }`,
                       }}
                     >
-                      {opt.label}{" "}
-                      <span className="opacity-60 text-xs">{opt.cost}</span>
+                      {opt.label}
                     </button>
                   ))}
                 </div>
@@ -505,10 +672,11 @@ export default function Home() {
                 </div>
               </div>
             </div>
+            )}
 
             {/* Generate Button */}
             <button
-              onClick={handleGenerate}
+              onClick={mode === "video" ? handleGenerate : handleEditImage}
               disabled={!image || !prompt.trim() || isProcessing}
               className="w-full py-3.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               style={{
@@ -539,11 +707,11 @@ export default function Home() {
                   {status === "uploading"
                     ? "이미지 업로드 중..."
                     : status === "generating"
-                    ? "생성 요청 중..."
-                    : `영상 생성 중... ${progress}%`}
+                    ? (mode === "video" ? "생성 요청 중..." : "이미지 편집 중...")
+                    : mode === "video" ? `영상 생성 중... ${progress}%` : "이미지 편집 중..."}
                 </span>
               ) : (
-                "영상 생성하기"
+                mode === "video" ? "영상 생성하기" : "이미지 편집하기"
               )}
             </button>
 
@@ -563,16 +731,16 @@ export default function Home() {
           </div>
 
           {/* Right: Output */}
-          <div>
+          <div className="overflow-y-auto min-h-0">
             <div
               className="rounded-xl overflow-hidden"
               style={{
                 background: "var(--bg-card)",
                 border: "1px solid var(--border)",
-                minHeight: 400,
               }}
             >
-              {videoUrl ? (
+              {/* Video Output */}
+              {mode === "video" && videoUrl ? (
                 <div className="relative">
                   <video
                     src={videoUrl}
@@ -580,7 +748,7 @@ export default function Home() {
                     autoPlay
                     loop
                     className="w-full"
-                    style={{ maxHeight: 480 }}
+                    style={{ maxHeight: "55vh" }}
                   />
                   <div className="p-4 flex gap-2">
                     <a
@@ -609,6 +777,52 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
+              ) : mode === "edit" && editedImageUrl ? (
+                <div className="relative">
+                  <img
+                    src={editedImageUrl}
+                    alt="Edited"
+                    className="w-full"
+                    style={{ objectFit: "contain", maxHeight: "55vh" }}
+                  />
+                  <div className="p-4 flex gap-2">
+                    <a
+                      href={editedImageUrl}
+                      download="gom_ai_edited.png"
+                      target="_blank"
+                      rel="noopener"
+                      className="flex-1 py-2 rounded-lg text-sm font-medium text-center transition-all"
+                      style={{
+                        background: "var(--accent)",
+                        color: "#fff",
+                      }}
+                    >
+                      다운로드
+                    </a>
+                    <button
+                      onClick={handleUseAsInput}
+                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
+                      style={{
+                        background: "var(--accent-glow)",
+                        color: "var(--accent)",
+                        border: "1px solid var(--accent)",
+                      }}
+                    >
+                      추가 편집
+                    </button>
+                    <button
+                      onClick={handleReset}
+                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
+                      style={{
+                        background: "var(--bg-hover)",
+                        color: "var(--text-secondary)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      새로 만들기
+                    </button>
+                  </div>
+                </div>
               ) : isProcessing ? (
                 <div className="flex flex-col items-center justify-center h-full py-20">
                   <div
@@ -624,17 +838,27 @@ export default function Home() {
                       strokeWidth="1.5"
                       style={{ color: "var(--accent)" }}
                     >
-                      <polygon points="5 3 19 12 5 21 5 3" />
+                      {mode === "video" ? (
+                        <polygon points="5 3 19 12 5 21 5 3" />
+                      ) : (
+                        <>
+                          <rect x="3" y="3" width="18" height="18" rx="2" />
+                          <path d="M12 8v8M8 12h8" />
+                        </>
+                      )}
                     </svg>
                   </div>
-                  <p className="text-sm font-medium mb-1">AI 영상 생성 중</p>
+                  <p className="text-sm font-medium mb-1">
+                    {mode === "video" ? "AI 영상 생성 중" : "AI 이미지 편집 중"}
+                  </p>
                   <p
                     className="text-xs"
                     style={{ color: "var(--text-secondary)" }}
                   >
-                    보통 1~3분 소요됩니다
+                    {mode === "video" ? "보통 1~3분 소요됩니다" : "보통 5~15초 소요됩니다"}
                   </p>
-                  {/* Progress Bar */}
+                  {/* Progress Bar — Video mode only */}
+                  {mode === "video" && (
                   <div
                     className="w-48 h-1 rounded-full mt-4 overflow-hidden"
                     style={{ background: "var(--border)" }}
@@ -647,6 +871,7 @@ export default function Home() {
                       }}
                     />
                   </div>
+                  )}
                 </div>
               ) : (
                 <div
@@ -662,11 +887,23 @@ export default function Home() {
                     strokeWidth="1"
                     className="mb-4 opacity-30"
                   >
-                    <rect x="2" y="4" width="20" height="16" rx="2" />
-                    <polygon points="10 8 16 12 10 16 10 8" />
+                    {mode === "video" ? (
+                      <>
+                        <rect x="2" y="4" width="20" height="16" rx="2" />
+                        <polygon points="10 8 16 12 10 16 10 8" />
+                      </>
+                    ) : (
+                      <>
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <path d="M21 15l-5-5L5 21" />
+                      </>
+                    )}
                   </svg>
                   <p className="text-sm opacity-50">
-                    생성된 영상이 여기에 표시됩니다
+                    {mode === "video"
+                      ? "생성된 영상이 여기에 표시됩니다"
+                      : "편집된 이미지가 여기에 표시됩니다"}
                   </p>
                 </div>
               )}
@@ -684,8 +921,9 @@ export default function Home() {
               <span className="font-medium" style={{ color: "var(--accent)" }}>
                 비용 안내
               </span>{" "}
-              · Kling 2.1 Pro I2V 기준 5초 ~$0.35 / 10초 ~$0.70 · 워터마크 없음
-              · 상업적 이용 가능
+              {mode === "video"
+                ? "· Kling I2V · 워터마크 없음 · 상업적 이용 가능"
+                : "· GPT Image · 워터마크 없음 · 상업적 이용 가능"}
             </div>
           </div>
         </div>
@@ -694,14 +932,19 @@ export default function Home() {
         {showHistory && (
           <div className="mt-10">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">생성 이력</h2>
-              {history.length > 0 && (
+              <h2 className="text-lg font-semibold">
+                {mode === "video" ? "생성 이력" : "편집 이력"}
+              </h2>
+              {(mode === "video" ? history : editHistory).length > 0 && (
                 <button
                   onClick={() => {
-                    setHistory([]);
-                    try {
-                      localStorage.removeItem(HISTORY_KEY);
-                    } catch {}
+                    if (mode === "video") {
+                      setHistory([]);
+                      try { localStorage.removeItem(HISTORY_KEY); } catch {}
+                    } else {
+                      setEditHistory([]);
+                      try { localStorage.removeItem(EDIT_HISTORY_KEY); } catch {}
+                    }
                   }}
                   className="text-xs px-3 py-1 rounded-lg transition-all"
                   style={{
@@ -713,14 +956,14 @@ export default function Home() {
                 </button>
               )}
             </div>
-            {history.length === 0 ? (
+            {(mode === "video" ? history : editHistory).length === 0 ? (
               <p
                 className="text-sm py-8 text-center"
                 style={{ color: "var(--text-secondary)" }}
               >
-                아직 생성 이력이 없습니다
+                아직 {mode === "video" ? "생성" : "편집"} 이력이 없습니다
               </p>
-            ) : (
+            ) : mode === "video" ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {history.map((item) => (
                   <div
@@ -734,7 +977,7 @@ export default function Home() {
                     <video
                       src={item.video_url}
                       className="w-full"
-                      style={{ maxHeight: 180 }}
+                      style={{ maxHeight: 200 }}
                       muted
                       loop
                       onMouseEnter={(e) => e.target.play()}
@@ -778,6 +1021,73 @@ export default function Home() {
                         <button
                           onClick={() => {
                             setVideoUrl(item.video_url);
+                            setPrompt(item.prompt);
+                            setShowHistory(false);
+                          }}
+                          className="flex-1 py-1 rounded text-xs"
+                          style={{
+                            background: "var(--bg-hover)",
+                            color: "var(--text-secondary)",
+                            border: "1px solid var(--border)",
+                          }}
+                        >
+                          재사용
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {editHistory.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl overflow-hidden transition-all hover:scale-[1.02]"
+                    style={{
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
+                    <img
+                      src={item.image_url}
+                      alt="Edited"
+                      className="w-full"
+                      style={{ maxHeight: 180, objectFit: "cover" }}
+                    />
+                    <div className="p-3">
+                      <p
+                        className="text-xs truncate mb-1"
+                        title={item.prompt}
+                      >
+                        {item.prompt}
+                      </p>
+                      <div
+                        className="flex items-center justify-between text-xs"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        <span>{item.model}</span>
+                        <span>
+                          {new Date(item.created_at).toLocaleDateString("ko")}
+                        </span>
+                      </div>
+                      <div className="flex gap-2 mt-2">
+                        <a
+                          href={item.image_url}
+                          download
+                          target="_blank"
+                          rel="noopener"
+                          className="flex-1 py-1 rounded text-xs text-center"
+                          style={{
+                            background: "var(--accent)",
+                            color: "#fff",
+                          }}
+                        >
+                          다운로드
+                        </a>
+                        <button
+                          onClick={() => {
+                            setEditedImageUrl(item.image_url);
                             setPrompt(item.prompt);
                             setShowHistory(false);
                           }}
