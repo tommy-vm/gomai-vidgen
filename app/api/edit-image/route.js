@@ -1,26 +1,26 @@
 // app/api/edit-image/route.js
 // 이미지 편집 API — OpenAI + Google Gemini
 import OpenAI from "openai";
-import { GoogleGenAI } from "@google/genai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const PROVIDERS = {
   "gpt-image-1": "openai",
-  "gemini-2.5-flash-image": "gemini",
-  "gemini-3-pro-image-preview": "gemini",
+  "gpt-image-1.5": "openai",
 };
 
-async function editWithOpenAI(image_base64, image_mime, prompt) {
+async function editWithOpenAI(image_base64, image_mime, prompt, modelId, quality, input_fidelity) {
   const imageBuffer = Buffer.from(image_base64, "base64");
   const ext = image_mime === "image/png" ? "png" : image_mime === "image/webp" ? "webp" : "png";
   const imageFile = new File([imageBuffer], `input.${ext}`, { type: image_mime });
 
   const response = await openai.images.edit({
-    model: "gpt-image-1",
+    model: modelId,
     image: imageFile,
     prompt,
+    quality: quality || "high",
+    input_fidelity: input_fidelity || "high",
+    size: "auto",
   });
 
   const resultBase64 = response.data?.[0]?.b64_json;
@@ -28,51 +28,10 @@ async function editWithOpenAI(image_base64, image_mime, prompt) {
   return { image_base64: resultBase64, mime_type: "image/png" };
 }
 
-async function editWithGemini(modelId, image_base64, image_mime, prompt) {
-  const response = await gemini.models.generateContent({
-    model: modelId,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { inlineData: { mimeType: image_mime || "image/png", data: image_base64 } },
-          { text: prompt },
-        ],
-      },
-    ],
-    config: {
-      responseModalities: ["TEXT", "IMAGE"],
-      safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
-      ],
-    },
-  });
-
-  const finishReason = response.candidates?.[0]?.finishReason;
-  const parts = response.candidates?.[0]?.content?.parts || [];
-
-  for (const part of parts) {
-    if (part.inlineData) {
-      return {
-        image_base64: part.inlineData.data,
-        mime_type: part.inlineData.mimeType || "image/png",
-      };
-    }
-  }
-
-  if (finishReason === "IMAGE_SAFETY") {
-    throw new Error("안전 정책에 의해 차단되었습니다. 다른 이미지나 프롬프트로 시도해주세요.");
-  }
-  const textPart = parts.find(p => p.text);
-  throw new Error(textPart ? textPart.text : "Gemini 응답에 이미지가 포함되지 않았습니다.");
-}
 
 export async function POST(request) {
   try {
-    const { image_base64, image_mime, prompt, model } = await request.json();
+    const { image_base64, image_mime, prompt, model, quality, input_fidelity } = await request.json();
 
     if (!image_base64 || !prompt) {
       return Response.json(
@@ -81,17 +40,10 @@ export async function POST(request) {
       );
     }
 
-    const modelId = PROVIDERS[model] ? model : "gpt-image-1";
-    const provider = PROVIDERS[modelId];
+    const modelId = PROVIDERS[model] ? model : "gpt-image-1.5";
+    console.log("[edit-image] model:", modelId);
 
-    console.log("[edit-image] model:", modelId, "provider:", provider);
-
-    let result;
-    if (provider === "openai") {
-      result = await editWithOpenAI(image_base64, image_mime, prompt);
-    } else {
-      result = await editWithGemini(modelId, image_base64, image_mime, prompt);
-    }
+    const result = await editWithOpenAI(image_base64, image_mime, prompt, modelId, quality, input_fidelity);
 
     return Response.json(result);
   } catch (error) {

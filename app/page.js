@@ -38,83 +38,31 @@ const MODEL_OPTIONS = [
 
 const EDIT_MODEL_OPTIONS = [
   {
+    value: "gpt-image-1.5",
+    label: "GPT Image 1.5",
+    desc: "고품질 편집",
+  },
+  {
     value: "gpt-image-1",
-    label: "GPT Image",
-    desc: "AI 이미지 편집",
+    label: "GPT Image 1",
+    desc: "기본 편집",
   },
 ];
 
-const EDIT_PROMPT_PRESETS = [
-  {
-    label: "의상 변경",
-    icon: "👔",
-    prompt: "Change the outfit to a navy blue business suit with a white shirt.",
-  },
-  {
-    label: "배경 교체",
-    icon: "🏖️",
-    prompt: "Change the background to a tropical beach with sunset lighting.",
-  },
-  {
-    label: "스타일 변환",
-    icon: "🎨",
-    prompt: "Transform the image into a watercolor painting style.",
-  },
-  {
-    label: "색상 변경",
-    icon: "🎨",
-    prompt: "Change the main color of the clothing to bright red.",
-  },
-  {
-    label: "계절 변경",
-    icon: "❄️",
-    prompt: "Change the scene to winter with snow falling in the background.",
-  },
-  {
-    label: "조명 변경",
-    icon: "💡",
-    prompt: "Change the lighting to warm golden hour sunlight from the left side.",
-  },
+const EDIT_QUALITY_OPTIONS = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
 ];
 
-const PROMPT_PRESETS = [
-  {
-    label: "아바타 움직임",
-    icon: "🙂",
-    prompt:
-      "The person slowly turns their head, smiles warmly at the camera, and blinks naturally. Soft studio lighting, smooth motion.",
-  },
-  {
-    label: "제품 360° 회전",
-    icon: "📦",
-    prompt:
-      "The product slowly rotates 360 degrees on a clean white turntable. Smooth continuous rotation, studio lighting, no background distractions.",
-  },
-  {
-    label: "제품 줌인",
-    icon: "🔍",
-    prompt:
-      "Camera smoothly zooms into the product, revealing fine details and textures. Cinematic shallow depth of field, soft lighting.",
-  },
-  {
-    label: "배경 애니메이션",
-    icon: "🌊",
-    prompt:
-      "The background gently animates with subtle motion — leaves swaying, light shifting, or clouds drifting — while the subject remains still.",
-  },
-  {
-    label: "립싱크 준비",
-    icon: "🎤",
-    prompt:
-      "The person opens their mouth slightly and begins speaking naturally, with subtle head movements and natural facial expressions. Front-facing, well-lit.",
-  },
-  {
-    label: "패션 포즈",
-    icon: "👗",
-    prompt:
-      "The model strikes a confident pose, fabric flows naturally with gentle movement. Fashion editorial lighting, cinematic slow motion feel.",
-  },
+const EDIT_FIDELITY_OPTIONS = [
+  { value: "low", label: "Low" },
+  { value: "high", label: "High" },
 ];
+
+const EDIT_PROMPT_PRESETS = [];
+
+const PROMPT_PRESETS = [];
 
 const HISTORY_KEY = "gom_ai_generation_history";
 const EDIT_HISTORY_KEY = "gom_ai_edit_history";
@@ -128,6 +76,8 @@ export default function Home() {
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [model, setModel] = useState(MODEL_OPTIONS[0].value);
   const [editModel, setEditModel] = useState(EDIT_MODEL_OPTIONS[0].value);
+  const [editQuality, setEditQuality] = useState("high");
+  const [editFidelity, setEditFidelity] = useState("high");
   const [status, setStatus] = useState("idle"); // idle | uploading | generating | polling | completed | error
   const [videoUrl, setVideoUrl] = useState(null);
   const [editedImageUrl, setEditedImageUrl] = useState(null);
@@ -242,6 +192,8 @@ export default function Home() {
           image_mime: image.type,
           prompt,
           model: editModel,
+          quality: editQuality,
+          input_fidelity: editFidelity,
         }),
       });
       const editData = await editRes.json();
@@ -453,8 +405,8 @@ export default function Home() {
       </header>
 
       {/* Main */}
-      <main className="px-6 py-6" style={{ height: "calc(100vh - 65px)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <div className="text-center mb-6">
+      <main className="px-6 py-4" style={{ height: "calc(100vh - 57px)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div className="text-center mb-4">
           <h1 className="text-2xl font-bold tracking-tight mb-1">
             {mode === "video" ? "Image → Video" : "Image → Edit"}
           </h1>
@@ -465,12 +417,12 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
           {/* Left: Input */}
-          <div className="space-y-4 overflow-y-auto min-h-0" style={{ paddingRight: 4 }}>
+          <div className="flex flex-col gap-3 overflow-y-auto min-h-0" style={{ paddingRight: 4 }}>
             {/* Image Upload */}
             <div
-              className="rounded-xl border-2 border-dashed p-1 transition-all cursor-pointer"
+              className="rounded-xl border-2 border-dashed p-1 transition-all cursor-pointer flex-1 min-h-0 flex items-center justify-center"
               style={{
                 borderColor: imagePreview ? "var(--accent)" : "var(--border)",
                 background: imagePreview ? "transparent" : "var(--bg-card)",
@@ -483,8 +435,8 @@ export default function Home() {
                 <img
                   src={imagePreview}
                   alt="Preview"
-                  className="w-full rounded-lg"
-                  style={{ objectFit: "contain", maxHeight: "35vh" }}
+                  className="w-full h-full rounded-lg"
+                  style={{ objectFit: "contain" }}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center py-16">
@@ -597,6 +549,80 @@ export default function Home() {
                 ))}
               </select>
             </div>
+
+            {/* Options Row — Edit mode */}
+            {mode === "edit" && (
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <label
+                  className="block text-xs font-medium mb-1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  품질
+                </label>
+                <div className="flex gap-2">
+                  {EDIT_QUALITY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => !isProcessing && setEditQuality(opt.value)}
+                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
+                      style={{
+                        background:
+                          editQuality === opt.value
+                            ? "var(--accent)"
+                            : "var(--bg-card)",
+                        color:
+                          editQuality === opt.value
+                            ? "#fff"
+                            : "var(--text-secondary)",
+                        border: `1px solid ${
+                          editQuality === opt.value
+                            ? "var(--accent)"
+                            : "var(--border)"
+                        }`,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  원본 유지
+                </label>
+                <div className="flex gap-2">
+                  {EDIT_FIDELITY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => !isProcessing && setEditFidelity(opt.value)}
+                      className="flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                      style={{
+                        background:
+                          editFidelity === opt.value
+                            ? "var(--accent)"
+                            : "var(--bg-card)",
+                        color:
+                          editFidelity === opt.value
+                            ? "#fff"
+                            : "var(--text-secondary)",
+                        border: `1px solid ${
+                          editFidelity === opt.value
+                            ? "var(--accent)"
+                            : "var(--border)"
+                        }`,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            )}
 
             {/* Options Row — Video mode only */}
             {mode === "video" && (
@@ -731,9 +757,9 @@ export default function Home() {
           </div>
 
           {/* Right: Output */}
-          <div className="overflow-y-auto min-h-0">
+          <div className="flex flex-col gap-3 min-h-0">
             <div
-              className="rounded-xl overflow-hidden"
+              className="rounded-xl overflow-hidden flex-1 min-h-0 flex flex-col"
               style={{
                 background: "var(--bg-card)",
                 border: "1px solid var(--border)",
@@ -741,14 +767,14 @@ export default function Home() {
             >
               {/* Video Output */}
               {mode === "video" && videoUrl ? (
-                <div className="relative">
+                <div className="flex flex-col flex-1 min-h-0">
                   <video
                     src={videoUrl}
                     controls
                     autoPlay
                     loop
-                    className="w-full"
-                    style={{ maxHeight: "55vh" }}
+                    className="w-full flex-1 min-h-0"
+                    style={{ objectFit: "contain" }}
                   />
                   <div className="p-4 flex gap-2">
                     <a
@@ -778,12 +804,12 @@ export default function Home() {
                   </div>
                 </div>
               ) : mode === "edit" && editedImageUrl ? (
-                <div className="relative">
+                <div className="flex flex-col flex-1 min-h-0">
                   <img
                     src={editedImageUrl}
                     alt="Edited"
-                    className="w-full"
-                    style={{ objectFit: "contain", maxHeight: "55vh" }}
+                    className="w-full flex-1 min-h-0"
+                    style={{ objectFit: "contain" }}
                   />
                   <div className="p-4 flex gap-2">
                     <a
@@ -824,7 +850,7 @@ export default function Home() {
                   </div>
                 </div>
               ) : isProcessing ? (
-                <div className="flex flex-col items-center justify-center h-full py-20">
+                <div className="flex flex-col items-center justify-center flex-1">
                   <div
                     className="w-20 h-20 rounded-2xl animate-pulse-glow shimmer-loading flex items-center justify-center mb-6"
                     style={{ background: "var(--bg-hover)" }}
@@ -875,7 +901,7 @@ export default function Home() {
                 </div>
               ) : (
                 <div
-                  className="flex flex-col items-center justify-center h-full py-20"
+                  className="flex flex-col items-center justify-center flex-1"
                   style={{ color: "var(--text-secondary)" }}
                 >
                   <svg
