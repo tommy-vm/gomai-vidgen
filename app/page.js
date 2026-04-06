@@ -68,7 +68,7 @@ const HISTORY_KEY = "gom_ai_generation_history";
 const EDIT_HISTORY_KEY = "gom_ai_edit_history";
 
 export default function Home() {
-  const [mode, setMode] = useState("video"); // video | edit
+  const [mode, setMode] = useState("edit"); // video | edit
   const [image, setImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [prompt, setPrompt] = useState("");
@@ -88,7 +88,6 @@ export default function Home() {
   const [showHistory, setShowHistory] = useState(false);
   const fileInputRef = useRef(null);
   const pollingRef = useRef(null);
-
   // 이력 로드
   useEffect(() => {
     try {
@@ -417,288 +416,318 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
-          {/* Left: Input */}
-          <div className="flex flex-col gap-3 overflow-y-auto min-h-0" style={{ paddingRight: 4 }}>
-            {/* Image Upload */}
-            <div
-              className="rounded-xl border-2 border-dashed p-1 transition-all cursor-pointer flex-1 min-h-0 flex items-center justify-center"
-              style={{
-                borderColor: imagePreview ? "var(--accent)" : "var(--border)",
-                background: imagePreview ? "transparent" : "var(--bg-card)",
-              }}
-              onClick={() => !isProcessing && fileInputRef.current?.click()}
-              onDrop={handleDrop}
-              onDragOver={(e) => e.preventDefault()}
-            >
-              {imagePreview ? (
-                <img
-                  src={imagePreview}
-                  alt="Preview"
-                  className="w-full h-full rounded-lg"
-                  style={{ objectFit: "contain" }}
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center py-16">
+        {/* Single unified frame — split 50/50 */}
+        <div
+          className="rounded-xl flex-1 min-h-0 flex"
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            overflow: "hidden",
+          }}
+        >
+          {/* Left half: Input */}
+          <div
+            className="flex-1 flex items-center justify-center"
+            style={{
+              borderRight: "1px solid var(--border)",
+              cursor: imagePreview ? "default" : "pointer",
+            }}
+            onClick={() => !isProcessing && !imagePreview && fileInputRef.current?.click()}
+            onDrop={handleDrop}
+            onDragOver={(e) => e.preventDefault()}
+          >
+            {imagePreview ? (
+              <img
+                src={imagePreview}
+                alt="Preview"
+                className="w-full h-full"
+                style={{ objectFit: "contain", padding: 4 }}
+                onClick={() => !isProcessing && fileInputRef.current?.click()}
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center">
+                <svg
+                  width="48"
+                  height="48"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="M21 15l-5-5L5 21" />
+                </svg>
+                <p
+                  className="mt-4 text-sm"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  클릭 또는 드래그하여 이미지 업로드
+                </p>
+                <p
+                  className="text-xs mt-1"
+                  style={{ color: "var(--text-secondary)", opacity: 0.6 }}
+                >
+                  JPG, PNG, WebP · 최대 10MB
+                </p>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={handleImageSelect}
+              className="hidden"
+            />
+          </div>
+
+          {/* Right half: Output */}
+          <div className="flex-1 flex items-center justify-center">
+            {mode === "video" && videoUrl ? (
+              <video
+                src={videoUrl}
+                controls
+                autoPlay
+                loop
+                className="w-full h-full"
+                style={{ objectFit: "contain", padding: 4 }}
+              />
+            ) : mode === "edit" && editedImageUrl ? (
+              <img
+                src={editedImageUrl}
+                alt="Edited"
+                className="w-full h-full"
+                style={{ objectFit: "contain", padding: 4 }}
+              />
+            ) : isProcessing ? (
+              <div className="flex flex-col items-center justify-center">
+                <div
+                  className="w-20 h-20 rounded-2xl animate-pulse-glow shimmer-loading flex items-center justify-center mb-6"
+                  style={{ background: "var(--bg-hover)" }}
+                >
                   <svg
-                    width="48"
-                    height="48"
+                    width="32"
+                    height="32"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.5"
-                    style={{ color: "var(--text-secondary)" }}
+                    style={{ color: "var(--accent)" }}
                   >
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="M21 15l-5-5L5 21" />
+                    {mode === "video" ? (
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    ) : (
+                      <>
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M12 8v8M8 12h8" />
+                      </>
+                    )}
                   </svg>
-                  <p
-                    className="mt-4 text-sm"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    클릭 또는 드래그하여 이미지 업로드
-                  </p>
-                  <p
-                    className="text-xs mt-1"
-                    style={{ color: "var(--text-secondary)", opacity: 0.6 }}
-                  >
-                    JPG, PNG, WebP · 최대 10MB
-                  </p>
                 </div>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={handleImageSelect}
-                className="hidden"
-              />
-            </div>
-
-            {/* Prompt */}
-            <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                {mode === "video" ? "모션 프롬프트" : "편집 프롬프트"}
-              </label>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                disabled={isProcessing}
-                placeholder={mode === "video"
-                  ? "예: The person slowly turns their head and smiles warmly at the camera, soft natural lighting"
-                  : "예: Change the outfit to a red dress, keep everything else the same"}
-                rows={3}
-                className="w-full rounded-lg px-4 py-3 text-sm outline-none resize-none transition-all focus:ring-2"
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-primary)",
-                  "--tw-ring-color": "var(--accent)",
-                }}
-              />
-              {/* Prompt Presets */}
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {(mode === "video" ? PROMPT_PRESETS : EDIT_PROMPT_PRESETS).map((preset) => (
-                  <button
-                    key={preset.label}
-                    onClick={() => !isProcessing && setPrompt(preset.prompt)}
-                    className="px-2.5 py-1 rounded-md text-xs transition-all hover:scale-105"
+                <p className="text-sm font-medium mb-1">
+                  {mode === "video" ? "AI 영상 생성 중" : "AI 이미지 편집 중"}
+                </p>
+                <p
+                  className="text-xs"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  {mode === "video" ? "보통 1~3분 소요됩니다" : "보통 5~15초 소요됩니다"}
+                </p>
+                {mode === "video" && (
+                <div
+                  className="w-48 h-1 rounded-full mt-4 overflow-hidden"
+                  style={{ background: "var(--border)" }}
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-1000"
                     style={{
-                      background: "var(--bg-hover)",
-                      color: "var(--text-secondary)",
-                      border: "1px solid var(--border)",
+                      width: `${progress}%`,
+                      background: "var(--accent)",
                     }}
-                    title={preset.prompt}
-                  >
-                    {preset.icon} {preset.label}
-                  </button>
-                ))}
+                  />
+                </div>
+                )}
               </div>
-            </div>
-
-            {/* Model Select */}
-            <div>
-              <label
-                className="block text-xs font-medium mb-1.5"
+            ) : (
+              <div
+                className="flex flex-col items-center justify-center"
                 style={{ color: "var(--text-secondary)" }}
               >
-                모델
-              </label>
-              <select
-                value={mode === "video" ? model : editModel}
-                onChange={(e) => {
-                  if (isProcessing) return;
-                  mode === "video" ? setModel(e.target.value) : setEditModel(e.target.value);
-                }}
-                disabled={isProcessing}
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none transition-all appearance-none cursor-pointer"
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-primary)",
-                }}
-              >
-                {(mode === "video" ? MODEL_OPTIONS : EDIT_MODEL_OPTIONS).map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label} — {opt.desc}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Options Row — Edit mode */}
-            {mode === "edit" && (
-            <div className="flex gap-4">
-              <div className="flex-1">
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: "var(--text-secondary)" }}
+                <svg
+                  width="48"
+                  height="48"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  className="mb-4 opacity-30"
                 >
-                  품질
-                </label>
-                <div className="flex gap-2">
-                  {EDIT_QUALITY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => !isProcessing && setEditQuality(opt.value)}
-                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background:
-                          editQuality === opt.value
-                            ? "var(--accent)"
-                            : "var(--bg-card)",
-                        color:
-                          editQuality === opt.value
-                            ? "#fff"
-                            : "var(--text-secondary)",
-                        border: `1px solid ${
-                          editQuality === opt.value
-                            ? "var(--accent)"
-                            : "var(--border)"
-                        }`,
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+                  {mode === "video" ? (
+                    <>
+                      <rect x="2" y="4" width="20" height="16" rx="2" />
+                      <polygon points="10 8 16 12 10 16 10 8" />
+                    </>
+                  ) : (
+                    <>
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <path d="M21 15l-5-5L5 21" />
+                    </>
+                  )}
+                </svg>
+                <p className="text-sm opacity-50">
+                  {mode === "video"
+                    ? "생성된 영상이 여기에 표시됩니다"
+                    : "편집된 이미지가 여기에 표시됩니다"}
+                </p>
               </div>
-              <div>
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: "var(--text-secondary)" }}
-                >
-                  원본 유지
-                </label>
-                <div className="flex gap-2">
-                  {EDIT_FIDELITY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => !isProcessing && setEditFidelity(opt.value)}
-                      className="flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background:
-                          editFidelity === opt.value
-                            ? "var(--accent)"
-                            : "var(--bg-card)",
-                        color:
-                          editFidelity === opt.value
-                            ? "#fff"
-                            : "var(--text-secondary)",
-                        border: `1px solid ${
-                          editFidelity === opt.value
-                            ? "var(--accent)"
-                            : "var(--border)"
-                        }`,
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
             )}
+          </div>
+        </div>
 
-            {/* Options Row — Video mode only */}
-            {mode === "video" && (
-            <div className="flex gap-4">
-              <div className="flex-1">
+        {/* Controls below the frame */}
+        <div className="flex gap-6 mt-3">
+          {/* Left controls: prompt, model, options, generate */}
+          <div className="flex-1 flex flex-col gap-3">
+            {/* Prompt */}
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              disabled={isProcessing}
+              placeholder={mode === "video"
+                ? "예: The person slowly turns their head and smiles warmly at the camera, soft natural lighting"
+                : "예: Change the outfit to a red dress, keep everything else the same"}
+              rows={2}
+              className="w-full rounded-lg px-4 py-3 text-sm outline-none resize-none transition-all focus:ring-2"
+              style={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+                "--tw-ring-color": "var(--accent)",
+              }}
+            />
+
+            {/* Model + Options row */}
+            <div className="flex gap-3 items-end flex-wrap">
+              {/* Model Select */}
+              <div className="flex-1" style={{ minWidth: 160 }}>
                 <label
                   className="block text-xs font-medium mb-1.5"
                   style={{ color: "var(--text-secondary)" }}
                 >
-                  길이
+                  모델
                 </label>
-                <div className="flex gap-2">
-                  {DURATION_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => !isProcessing && setDuration(opt.value)}
-                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background:
-                          duration === opt.value
-                            ? "var(--accent)"
-                            : "var(--bg-card)",
-                        color:
-                          duration === opt.value
-                            ? "#fff"
-                            : "var(--text-secondary)",
-                        border: `1px solid ${
-                          duration === opt.value
-                            ? "var(--accent)"
-                            : "var(--border)"
-                        }`,
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: "var(--text-secondary)" }}
+                <select
+                  value={mode === "video" ? model : editModel}
+                  onChange={(e) => {
+                    if (isProcessing) return;
+                    mode === "video" ? setModel(e.target.value) : setEditModel(e.target.value);
+                  }}
+                  disabled={isProcessing}
+                  className="w-full rounded-lg px-3 py-2 text-sm outline-none transition-all appearance-none cursor-pointer"
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
                 >
-                  비율
-                </label>
-                <div className="flex gap-2">
-                  {ASPECT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() =>
-                        !isProcessing && setAspectRatio(opt.value)
-                      }
-                      className="px-3 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background:
-                          aspectRatio === opt.value
-                            ? "var(--accent)"
-                            : "var(--bg-card)",
-                        color:
-                          aspectRatio === opt.value
-                            ? "#fff"
-                            : "var(--text-secondary)",
-                        border: `1px solid ${
-                          aspectRatio === opt.value
-                            ? "var(--accent)"
-                            : "var(--border)"
-                        }`,
-                      }}
-                    >
-                      {opt.label}
-                    </button>
+                  {(mode === "video" ? MODEL_OPTIONS : EDIT_MODEL_OPTIONS).map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} — {opt.desc}
+                    </option>
                   ))}
-                </div>
+                </select>
               </div>
+
+              {/* Edit mode options */}
+              {mode === "edit" && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>품질</label>
+                  <div className="flex gap-1.5">
+                    {EDIT_QUALITY_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => !isProcessing && setEditQuality(opt.value)}
+                        className="px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                        style={{
+                          background: editQuality === opt.value ? "var(--accent)" : "var(--bg-card)",
+                          color: editQuality === opt.value ? "#fff" : "var(--text-secondary)",
+                          border: `1px solid ${editQuality === opt.value ? "var(--accent)" : "var(--border)"}`,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>원본 유지</label>
+                  <div className="flex gap-1.5">
+                    {EDIT_FIDELITY_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => !isProcessing && setEditFidelity(opt.value)}
+                        className="px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                        style={{
+                          background: editFidelity === opt.value ? "var(--accent)" : "var(--bg-card)",
+                          color: editFidelity === opt.value ? "#fff" : "var(--text-secondary)",
+                          border: `1px solid ${editFidelity === opt.value ? "var(--accent)" : "var(--border)"}`,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+              )}
+
+              {/* Video mode options */}
+              {mode === "video" && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>길이</label>
+                  <div className="flex gap-1.5">
+                    {DURATION_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => !isProcessing && setDuration(opt.value)}
+                        className="px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                        style={{
+                          background: duration === opt.value ? "var(--accent)" : "var(--bg-card)",
+                          color: duration === opt.value ? "#fff" : "var(--text-secondary)",
+                          border: `1px solid ${duration === opt.value ? "var(--accent)" : "var(--border)"}`,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>비율</label>
+                  <div className="flex gap-1.5">
+                    {ASPECT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => !isProcessing && setAspectRatio(opt.value)}
+                        className="px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                        style={{
+                          background: aspectRatio === opt.value ? "var(--accent)" : "var(--bg-card)",
+                          color: aspectRatio === opt.value ? "#fff" : "var(--text-secondary)",
+                          border: `1px solid ${aspectRatio === opt.value ? "var(--accent)" : "var(--border)"}`,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+              )}
             </div>
-            )}
 
             {/* Generate Button */}
             <button
@@ -756,192 +785,59 @@ export default function Home() {
             )}
           </div>
 
-          {/* Right: Output */}
-          <div className="flex flex-col gap-3 min-h-0">
-            <div
-              className="rounded-xl overflow-hidden flex-1 min-h-0 flex flex-col"
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border)",
-              }}
-            >
-              {/* Video Output */}
-              {mode === "video" && videoUrl ? (
-                <div className="flex flex-col flex-1 min-h-0">
-                  <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden">
-                    <video
-                      src={videoUrl}
-                      controls
-                      autoPlay
-                      loop
-                      className="max-w-full max-h-full"
-                      style={{ objectFit: "contain" }}
-                    />
-                  </div>
-                  <div className="p-4 flex gap-2 shrink-0">
-                    <a
-                      href={videoUrl}
-                      download="gom_ai_output.mp4"
-                      target="_blank"
-                      rel="noopener"
-                      className="flex-1 py-2 rounded-lg text-sm font-medium text-center transition-all"
-                      style={{
-                        background: "var(--accent)",
-                        color: "#fff",
-                      }}
-                    >
-                      다운로드
-                    </a>
-                    <button
-                      onClick={handleReset}
-                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background: "var(--bg-hover)",
-                        color: "var(--text-secondary)",
-                        border: "1px solid var(--border)",
-                      }}
-                    >
-                      새로 만들기
-                    </button>
-                  </div>
-                </div>
-              ) : mode === "edit" && editedImageUrl ? (
-                <div className="flex flex-col flex-1 min-h-0">
-                  <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden">
-                    <img
-                      src={editedImageUrl}
-                      alt="Edited"
-                      className="max-w-full max-h-full"
-                      style={{ objectFit: "contain" }}
-                    />
-                  </div>
-                  <div className="p-4 flex gap-2 shrink-0">
-                    <a
-                      href={editedImageUrl}
-                      download="gom_ai_edited.png"
-                      target="_blank"
-                      rel="noopener"
-                      className="flex-1 py-2 rounded-lg text-sm font-medium text-center transition-all"
-                      style={{
-                        background: "var(--accent)",
-                        color: "#fff",
-                      }}
-                    >
-                      다운로드
-                    </a>
-                    <button
-                      onClick={handleUseAsInput}
-                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background: "var(--accent-glow)",
-                        color: "var(--accent)",
-                        border: "1px solid var(--accent)",
-                      }}
-                    >
-                      추가 편집
-                    </button>
-                    <button
-                      onClick={handleReset}
-                      className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-                      style={{
-                        background: "var(--bg-hover)",
-                        color: "var(--text-secondary)",
-                        border: "1px solid var(--border)",
-                      }}
-                    >
-                      새로 만들기
-                    </button>
-                  </div>
-                </div>
-              ) : isProcessing ? (
-                <div className="flex flex-col items-center justify-center flex-1">
-                  <div
-                    className="w-20 h-20 rounded-2xl animate-pulse-glow shimmer-loading flex items-center justify-center mb-6"
-                    style={{ background: "var(--bg-hover)" }}
-                  >
-                    <svg
-                      width="32"
-                      height="32"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      style={{ color: "var(--accent)" }}
-                    >
-                      {mode === "video" ? (
-                        <polygon points="5 3 19 12 5 21 5 3" />
-                      ) : (
-                        <>
-                          <rect x="3" y="3" width="18" height="18" rx="2" />
-                          <path d="M12 8v8M8 12h8" />
-                        </>
-                      )}
-                    </svg>
-                  </div>
-                  <p className="text-sm font-medium mb-1">
-                    {mode === "video" ? "AI 영상 생성 중" : "AI 이미지 편집 중"}
-                  </p>
-                  <p
-                    className="text-xs"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {mode === "video" ? "보통 1~3분 소요됩니다" : "보통 5~15초 소요됩니다"}
-                  </p>
-                  {/* Progress Bar — Video mode only */}
-                  {mode === "video" && (
-                  <div
-                    className="w-48 h-1 rounded-full mt-4 overflow-hidden"
-                    style={{ background: "var(--border)" }}
-                  >
-                    <div
-                      className="h-full rounded-full transition-all duration-1000"
-                      style={{
-                        width: `${progress}%`,
-                        background: "var(--accent)",
-                      }}
-                    />
-                  </div>
-                  )}
-                </div>
-              ) : (
-                <div
-                  className="flex flex-col items-center justify-center flex-1"
-                  style={{ color: "var(--text-secondary)" }}
+          {/* Right controls: output buttons */}
+          <div className="flex-1 flex flex-col gap-3">
+            {mode === "video" && videoUrl && (
+              <div className="flex gap-2">
+                <a
+                  href={videoUrl}
+                  download="gom_ai_output.mp4"
+                  target="_blank"
+                  rel="noopener"
+                  className="flex-1 py-2 rounded-lg text-sm font-medium text-center transition-all"
+                  style={{ background: "var(--accent)", color: "#fff" }}
                 >
-                  <svg
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1"
-                    className="mb-4 opacity-30"
-                  >
-                    {mode === "video" ? (
-                      <>
-                        <rect x="2" y="4" width="20" height="16" rx="2" />
-                        <polygon points="10 8 16 12 10 16 10 8" />
-                      </>
-                    ) : (
-                      <>
-                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                        <circle cx="8.5" cy="8.5" r="1.5" />
-                        <path d="M21 15l-5-5L5 21" />
-                      </>
-                    )}
-                  </svg>
-                  <p className="text-sm opacity-50">
-                    {mode === "video"
-                      ? "생성된 영상이 여기에 표시됩니다"
-                      : "편집된 이미지가 여기에 표시됩니다"}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Cost Info */}
+                  다운로드
+                </a>
+                <button
+                  onClick={handleReset}
+                  className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
+                  style={{ background: "var(--bg-hover)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+                >
+                  새로 만들기
+                </button>
+              </div>
+            )}
+            {mode === "edit" && editedImageUrl && (
+              <div className="flex gap-2">
+                <a
+                  href={editedImageUrl}
+                  download="gom_ai_edited.png"
+                  target="_blank"
+                  rel="noopener"
+                  className="flex-1 py-2 rounded-lg text-sm font-medium text-center transition-all"
+                  style={{ background: "var(--accent)", color: "#fff" }}
+                >
+                  다운로드
+                </a>
+                <button
+                  onClick={handleUseAsInput}
+                  className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
+                  style={{ background: "var(--accent-glow)", color: "var(--accent)", border: "1px solid var(--accent)" }}
+                >
+                  추가 편집
+                </button>
+                <button
+                  onClick={handleReset}
+                  className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
+                  style={{ background: "var(--bg-hover)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+                >
+                  새로 만들기
+                </button>
+              </div>
+            )}
             <div
-              className="mt-4 rounded-lg px-4 py-3 text-xs"
+              className="rounded-lg px-4 py-3 text-xs"
               style={{
                 background: "var(--bg-card)",
                 color: "var(--text-secondary)",
