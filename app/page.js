@@ -768,15 +768,17 @@ export default function Home() {
               {/* Video Output */}
               {mode === "video" && videoUrl ? (
                 <div className="flex flex-col flex-1 min-h-0">
-                  <video
-                    src={videoUrl}
-                    controls
-                    autoPlay
-                    loop
-                    className="w-full flex-1 min-h-0"
-                    style={{ objectFit: "contain" }}
-                  />
-                  <div className="p-4 flex gap-2">
+                  <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden">
+                    <video
+                      src={videoUrl}
+                      controls
+                      autoPlay
+                      loop
+                      className="max-w-full max-h-full"
+                      style={{ objectFit: "contain" }}
+                    />
+                  </div>
+                  <div className="p-4 flex gap-2 shrink-0">
                     <a
                       href={videoUrl}
                       download="gom_ai_output.mp4"
@@ -805,13 +807,15 @@ export default function Home() {
                 </div>
               ) : mode === "edit" && editedImageUrl ? (
                 <div className="flex flex-col flex-1 min-h-0">
-                  <img
-                    src={editedImageUrl}
-                    alt="Edited"
-                    className="w-full flex-1 min-h-0"
-                    style={{ objectFit: "contain" }}
-                  />
-                  <div className="p-4 flex gap-2">
+                  <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={editedImageUrl}
+                      alt="Edited"
+                      className="max-w-full max-h-full"
+                      style={{ objectFit: "contain" }}
+                    />
+                  </div>
+                  <div className="p-4 flex gap-2 shrink-0">
                     <a
                       href={editedImageUrl}
                       download="gom_ai_edited.png"
