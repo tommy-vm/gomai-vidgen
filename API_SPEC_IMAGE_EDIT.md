@@ -1,16 +1,18 @@
 # 이미지 편집 (AI Image Edit) API 명세
 
+서버 주소: `https://{서버주소}` (배포 후 확정)
+
+인증: `Authorization` 헤더에 사전 공유된 API 토큰 사용
+
 ---
 
 ## 1. 파일 업로드
 
 ```
 //=================================================================================//
-POST https://xxx.xxx.xxx/api/image
-User-Agent: NEW_GOMPIC
-Authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9(TokenKey)
+POST https://{서버주소}/api/image
+Authorization: {API_TOKEN}
 Content-Type: multipart/form-data; boundary="cb82c5c2-9955-4ed2-85cd-402fa63669a6"
-Content-Length: 2441125
 
 --cb82c5c2-9955-4ed2-85cd-402fa63669a6
 Content-Type: application/octet-stream
@@ -19,9 +21,16 @@ Content-Disposition: form-data; name=file; filename=sample.png; filename*=utf-8'
 sample.png 첨부
 //=================================================================================//
 
-=> Response
+=> Response (성공)
 {"uid":"4ad13940-2f8b-11ef-a525-33a8a9e36d10","filename":"sample.png","size":2440902}
+
+=> Response (실패)
+{"error":"file 필드가 필요합니다."}
 ```
+
+- 업로드된 이미지는 서버에서 1시간 보관 후 자동 삭제
+- 지원 포맷: JPG, PNG, WebP
+- form-data 필드명: `file`
 
 ---
 
@@ -29,11 +38,9 @@ sample.png 첨부
 
 ```
 //=================================================================================//
-POST https://xxx.xxx.xxx/api/image/task
-User-Agent: NEW_GOMPIC
-Authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9(TokenKey)
+POST https://{서버주소}/api/image/task
+Authorization: {API_TOKEN}
 Content-Type: application/json
-Content-Length: 325
 
 {
   "uid": "4ad13940-2f8b-11ef-a525-33a8a9e36d10",
@@ -44,8 +51,11 @@ Content-Length: 325
 }
 //=================================================================================//
 
-=> Response
+=> Response (성공)
 {"tid":"2459dc00-318b-11f1-b099-f7f8d6aff3a6","uid":"4ad13940-2f8b-11ef-a525-33a8a9e36d10"}
+
+=> Response (실패)
+{"error":"uid에 해당하는 이미지가 없습니다."}
 ```
 
 ### 옵션값 정리
@@ -60,23 +70,54 @@ Content-Length: 325
 
 ---
 
-## 3. 진행 및 다운로드
+## 3. 진행 조회
 
 ```
 //=================================================================================//
-GET https://xxx.xxx.xxx/api/image/task/2459dc00-318b-11f1-b099-f7f8d6aff3a6
-User-Agent: NEW_GOMPIC
-Authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9(TokenKey)
-Content-Type: application/x-www-form-urlencoded
-Content-Length: 0
+GET https://{서버주소}/api/image/task/{tid}
+Authorization: {API_TOKEN}
 //=================================================================================//
+
+=> Response (대기중)
+{"state":"queued","progress":0,"url":""}
 
 => Response (진행중)
 {"state":"processing","progress":50,"url":""}
 
 => Response (완료)
-{"state":"completed","progress":100,"url":"https://xxx.xxx.xxx/api/image/task/result/2459dc00-318b-11f1-b099-f7f8d6aff3a6/"}
+{"state":"completed","progress":100,"url":"https://{서버주소}/api/image/task/{tid}/result"}
+
+=> Response (실패)
+{"state":"failed","progress":0,"url":"","error":"에러 메시지"}
 ```
+
+### state 값
+
+| state | 설명 |
+|---|---|
+| `queued` | 작업 대기중 |
+| `processing` | AI 편집 처리중 |
+| `completed` | 완료 — `url` 필드에서 결과 이미지 다운로드 |
+| `failed` | 실패 — `error` 필드에 사유 |
+
+---
+
+## 4. 결과 이미지 다운로드
+
+```
+//=================================================================================//
+GET https://{서버주소}/api/image/task/{tid}/result
+Authorization: {API_TOKEN}
+//=================================================================================//
+
+=> Response
+Content-Type: image/png
+Content-Disposition: attachment; filename="edited_{tid}.png"
+
+(PNG 바이너리 데이터)
+```
+
+- 결과 이미지는 1시간 보관 후 자동 삭제
 
 ---
 
@@ -86,4 +127,15 @@ Content-Length: 0
 - 입력 이미지의 비율(aspect ratio)이 그대로 유지됨
 - 워터마크 없음, 상업적 이용 가능
 - 편집 소요시간: 보통 5~15초
-- 지원 입력 포맷: JPG, PNG, WebP
+- 인물 사진의 경우 OpenAI 안전 필터에 의해 일부 편집이 거부될 수 있음
+
+---
+
+## 인증 에러
+
+모든 엔드포인트에서 토큰이 유효하지 않을 경우:
+
+```
+=> Response (401)
+{"error":"Unauthorized"}
+```
