@@ -18,17 +18,59 @@ export const TOOLS = {
     normalize: (data) => ({ kind: "image", url: data?.image?.url, transparent: true }),
   },
 
-  // 배경 제거 / 컷아웃 — 자동 전체 (영상) — webm/vp9 알파(투명) 출력
+  // 배경 제거 / 컷아웃 — 자동 전체 (영상)
+  // codec: vp9(webm, 투명) | h264(mp4, 비투명). 투명 여부는 출력 content_type 으로 판단
   "remove-bg-video": {
     model: "veed/video-background-removal",
     accepts: ["video"],
-    buildInput: ({ fileUrl }) => ({
+    buildInput: ({ fileUrl, options }) => ({
       video_url: fileUrl,
-      output_codec: "vp9",
+      output_codec: options?.codec === "h264" ? "h264" : "vp9",
       refine_foreground_edges: true,
       subject_is_person: true,
     }),
-    normalize: (data) => ({ kind: "video", url: data?.video?.[0]?.url, transparent: true }),
+    normalize: (data) => {
+      const v = data?.video?.[0];
+      const isWebm = (v?.content_type || "").includes("webm");
+      return { kind: "video", url: v?.url, transparent: isWebm, bgFilled: !isWebm };
+    },
+  },
+
+  // 영상 생성 편집 — 빠른 적용 (프롬프트형, 마스크 불필요)
+  "bernini-edit": {
+    model: "fal-ai/bernini-r/edit-video",
+    accepts: ["video"],
+    buildInput: ({ fileUrl, prompt }) => ({ video_url: fileUrl, prompt: prompt || "" }),
+    normalize: (data) => ({ kind: "video", url: data?.video?.url, transparent: false }),
+  },
+
+  // 영상 생성 편집 — 정밀 제어 (마스크형). mask_image_url 은 SAM3 마스크에서 생성
+  "vace-edit": {
+    model: "fal-ai/wan-vace-14b/inpainting",
+    accepts: ["video"],
+    buildInput: ({ fileUrl, prompt, options }) => {
+      const input = { video_url: fileUrl, prompt: prompt || "" };
+      if (options?.mask_url) input.mask_image_url = options.mask_url;
+      if (options?.ref_urls?.length) input.ref_image_urls = options.ref_urls;
+      return input;
+    },
+    normalize: (data) => ({ kind: "video", url: data?.video?.url, transparent: false }),
+  },
+
+  // 첫 프레임에서 마스크 추출 (SAM3) — vace-edit 의 mask_image_url 공급용
+  "cutout-mask": {
+    model: "fal-ai/sam-3/image",
+    accepts: ["image"],
+    buildInput: ({ fileUrl, prompt, options }) => {
+      const input = {
+        image_url: fileUrl,
+        detection_threshold: options?.threshold ?? 0.3,
+      };
+      if (prompt) input.prompt = prompt;
+      if (options?.points?.length) input.point_prompts = options.points;
+      return input;
+    },
+    normalize: (data) => ({ kind: "mask", url: data?.masks?.[0]?.url }),
   },
 
   // 컷아웃 — 대상 지정 (이미지) : 텍스트 / 클릭 포인트 / 박스 가이드 (SAM3) → 투명 PNG

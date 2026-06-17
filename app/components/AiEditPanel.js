@@ -28,6 +28,12 @@ const FEATURES = [
     desc: "무음 기반 또는 내용(대사) 기반으로 컷",
     accepts: ["audio", "video"],
   },
+  {
+    id: "video-edit",
+    label: "영상 생성 편집",
+    desc: "배경 생성·오브젝트 추가/교체 (생성형)",
+    accepts: ["video"],
+  },
 ];
 
 const KIND_LABEL = { image: "이미지", video: "영상", audio: "오디오" };
@@ -49,8 +55,8 @@ const GUIDE = [
       {
         mode: "자동 · 영상",
         model: "veed/video-background-removal",
-        input: "video_url, output_codec:'vp9', refine_foreground_edges:true, subject_is_person:true",
-        output: "video[0].url — webm(알파)",
+        input: "video_url, output_codec:'vp9'(webm,투명) | 'h264'(mp4,비투명), refine_foreground_edges:true, subject_is_person:true",
+        output: "video[0].url — vp9=webm(알파/투명), h264=mp4(배경 단색)",
       },
       {
         mode: "대상 지정 · 이미지",
@@ -103,6 +109,26 @@ const GUIDE = [
     ],
     note:
       "최종 출력은 컷 리스트 JSON: { unit:'seconds', keep:[[s,e],...], remove:[[s,e],...] }. 곰믹스가 이 좌표를 타임라인에 적용(영상 렌더링은 곰 측).",
+  },
+  {
+    title: "영상 생성 편집 (배경 생성 / 오브젝트 추가·교체)",
+    items: [
+      {
+        mode: "빠른 적용 · 프롬프트형",
+        model: "fal-ai/bernini-r/edit-video",
+        input: "video_url, prompt(영문 권장: 배경/객체/날씨/카메라각 변경 지시)",
+        output: "video.url — mp4 ($0.08/s @848px)",
+      },
+      {
+        mode: "정밀 제어 · 마스크형",
+        model: "fal-ai/wan-vace-14b/inpainting (+ fal-ai/sam-3/image 마스크)",
+        input:
+          "1) 첫 프레임 추출(클라 canvas) → 2) SAM3로 대상 마스크 생성 → 3) video_url + mask_image_url + prompt",
+        output: "video.url — mp4 (마스크 영역만 재생성, 수 분 소요)",
+      },
+    ],
+    note:
+      "생성형(diffusion) 편집이라 원본 픽셀이 그대로 보존되지 않음(인물 디테일 미세 변화 가능). 초당 과금·처리시간 김. VACE는 출력 프레임 수가 고정이라 길이가 원본과 다를 수 있음.",
   },
 ];
 
@@ -188,6 +214,11 @@ export default function AiEditPanel() {
   const [bgPrompt, setBgPrompt] = useState("");
   const [cutMode, setCutMode] = useState("silence"); // silence | content
   const [cutInstruction, setCutInstruction] = useState("");
+  const [videoCodec, setVideoCodec] = useState("vp9"); // vp9(webm,투명) | h264(mp4)
+  const [veditMode, setVeditMode] = useState("fast"); // fast(프롬프트) | precise(마스크)
+  const [veditPrompt, setVeditPrompt] = useState("");
+  const [veditRegion, setVeditRegion] = useState("");
+  const [procNote, setProcNote] = useState("");
 
   // 결과 보조 상태
   const [minSilence, setMinSilence] = useState(0.6);
@@ -220,6 +251,11 @@ export default function AiEditPanel() {
     setBgPrompt("");
     setCutMode("silence");
     setCutInstruction("");
+    setVideoCodec("vp9");
+    setVeditMode("fast");
+    setVeditPrompt("");
+    setVeditRegion("");
+    setProcNote("");
   };
 
   const acceptFile = (f) => {
@@ -307,8 +343,134 @@ export default function AiEditPanel() {
     }, 2000);
   };
 
+  // --- 영상 생성 편집 (체이닝) 헬퍼 ---
+  const uploadFile = async (f) => {
+    const fd = new FormData();
+    fd.append("file", f);
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data.url;
+  };
+
+  const pollResultPromise = (request_id, model, toolKey) =>
+    new Promise((resolve, reject) => {
+      const iv = setInterval(async () => {
+        try {
+          const res = await fetch(
+            `/api/tools/result?request_id=${request_id}&model=${encodeURIComponent(
+              model
+            )}&tool=${toolKey}`
+          );
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error);
+          if (data.status === "completed") {
+            clearInterval(iv);
+            resolve(data.result);
+          }
+        } catch (e) {
+          clearInterval(iv);
+          reject(e);
+        }
+      }, 2000);
+      pollingRef.current = iv;
+    });
+
+  const submitAndWait = async (toolKey, file_url, { prompt, options, file_kind } = {}) => {
+    const res = await fetch("/api/tools/process", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tool: toolKey,
+        file_url,
+        file_kind: file_kind || "video",
+        prompt: prompt || "",
+        options,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return pollResultPromise(data.request_id, data.model, toolKey);
+  };
+
+  // 영상 첫 프레임을 PNG로 추출 (브라우저 canvas)
+  const extractFirstFrame = (f) =>
+    new Promise((resolve, reject) => {
+      const v = document.createElement("video");
+      v.preload = "auto";
+      v.muted = true;
+      v.src = URL.createObjectURL(f);
+      v.onloadeddata = () => {
+        v.currentTime = Math.min(0.1, v.duration || 0.1);
+      };
+      v.onseeked = () => {
+        try {
+          const c = document.createElement("canvas");
+          c.width = v.videoWidth;
+          c.height = v.videoHeight;
+          c.getContext("2d").drawImage(v, 0, 0);
+          c.toBlob((b) => {
+            URL.revokeObjectURL(v.src);
+            b
+              ? resolve(new File([b], "frame.png", { type: "image/png" }))
+              : reject(new Error("프레임 추출 실패"));
+          }, "image/png");
+        } catch (e) {
+          reject(e);
+        }
+      };
+      v.onerror = () => reject(new Error("영상 로드 실패"));
+    });
+
+  const handleVideoEdit = async () => {
+    const prompt = veditPrompt.trim();
+    if (!prompt) return setErrorMsg("편집 프롬프트를 입력하세요.");
+    if (veditMode === "precise" && !veditRegion.trim()) {
+      return setErrorMsg("정밀 제어는 대상(마스크) 텍스트가 필요합니다 (영문, 예: person).");
+    }
+    setErrorMsg("");
+    setResult(null);
+    setAiRemove(null);
+    setRunMode("none");
+    try {
+      setStatus("uploading");
+      setProcNote("영상 업로드 중…");
+      const videoUrl = await uploadFile(file);
+
+      if (veditMode === "fast") {
+        setStatus("polling");
+        setProcNote("생성형 편집 중… (수십 초~수 분)");
+        const r = await submitAndWait("bernini-edit", videoUrl, { prompt });
+        setResult(r);
+      } else {
+        setStatus("polling");
+        setProcNote("첫 프레임에서 대상 마스크 추출 중…");
+        const frame = await extractFirstFrame(file);
+        const frameUrl = await uploadFile(frame);
+        const mask = await submitAndWait("cutout-mask", frameUrl, {
+          prompt: veditRegion.trim(),
+          file_kind: "image",
+        });
+        if (!mask?.url) throw new Error("마스크 생성 실패 — 대상어(영문)를 바꿔보세요.");
+        setProcNote("마스크 영역 생성형 편집 중… (수 분 소요)");
+        const r = await submitAndWait("vace-edit", videoUrl, {
+          prompt,
+          options: { mask_url: mask.url },
+        });
+        setResult(r);
+      }
+      setProcNote("");
+      setStatus("completed");
+    } catch (err) {
+      setProcNote("");
+      setErrorMsg(err.message || "오류가 발생했습니다.");
+      setStatus("error");
+    }
+  };
+
   const handleRun = async () => {
     if (!file || !feature) return;
+    if (feature.id === "video-edit") return handleVideoEdit();
     let toolKey;
     let prompt = "";
     let options;
@@ -317,6 +479,7 @@ export default function AiEditPanel() {
       // 영상은 자동(전체) 전용, 타깃 컷아웃은 이미지에서만
       if (kind === "video" || cutoutMode === "auto") {
         toolKey = kind === "video" ? "remove-bg-video" : "remove-bg-image";
+        if (kind === "video") options = { codec: videoCodec };
       } else {
         toolKey = "cutout-image";
         prompt = cutoutText.trim();
@@ -562,9 +725,33 @@ export default function AiEditPanel() {
             {feature.id === "bg-remove" && (
               <div className="space-y-4">
                 {kind === "video" ? (
-                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                    영상은 전체 배경 제거(투명 webm)만 지원합니다. 대상 지정 컷아웃은 이미지에서 사용하세요.
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                      영상은 전체 배경 제거만 지원합니다(대상 지정은 이미지 전용). 출력 형식 선택:
+                    </p>
+                    <div className="flex gap-2">
+                      {[
+                        ["vp9", "투명 webm"],
+                        ["h264", "mp4 (비투명)"],
+                      ].map(([v, label]) => (
+                        <button
+                          key={v}
+                          onClick={() => setVideoCodec(v)}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                          style={{
+                            background: videoCodec === v ? "var(--accent)" : "var(--bg-hover)",
+                            color: videoCodec === v ? "#fff" : "var(--text-secondary)",
+                            border: "1px solid var(--border)",
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                      mp4는 투명을 지원하지 않아 제거된 배경이 단색으로 채워집니다. 다른 배경에 합성하려면 투명 webm을 쓰세요.
+                    </p>
+                  </div>
                 ) : (
                   <div className="flex gap-2">
                     {[
@@ -718,6 +905,58 @@ export default function AiEditPanel() {
               </div>
             )}
 
+            {/* 영상 생성 편집 */}
+            {feature.id === "video-edit" && (
+              <div className="space-y-4">
+                <div className="flex gap-2">
+                  {[
+                    ["fast", "빠른 적용 (프롬프트)"],
+                    ["precise", "정밀 제어 (마스크)"],
+                  ].map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setVeditMode(v)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                      style={{
+                        background: veditMode === v ? "var(--accent)" : "var(--bg-hover)",
+                        color: veditMode === v ? "#fff" : "var(--text-secondary)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {veditMode === "precise" && (
+                  <input
+                    value={veditRegion}
+                    onChange={(e) => setVeditRegion(e.target.value)}
+                    placeholder="편집할 대상 — 영문 (예: person, car) · 첫 프레임에서 마스크 자동 추출"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                  />
+                )}
+                <input
+                  value={veditPrompt}
+                  onChange={(e) => setVeditPrompt(e.target.value)}
+                  placeholder={
+                    veditMode === "fast"
+                      ? "편집 지시 (영문 권장, 예: change background to a sunset beach / add a dog)"
+                      : "대상 영역을 무엇으로 바꿀지 (영문, 예: replace with a red sports car)"
+                  }
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                  style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                />
+                <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  {veditMode === "fast"
+                    ? "프롬프트형(bernini-r): 마스크 없이 전체 장면을 재편집. 빠르고 저렴하나 의도 외 영역도 바뀔 수 있음."
+                    : "마스크형(Wan VACE + SAM): 첫 프레임에서 대상 마스크를 뽑아 그 영역만 정밀 편집. 단계가 많아 수 분 소요."}
+                  {" "}생성형이라 원본 픽셀이 그대로 보존되지 않고, 초당 과금됩니다.
+                </p>
+              </div>
+            )}
+
             <button
               onClick={handleRun}
               disabled={isBusy}
@@ -726,6 +965,9 @@ export default function AiEditPanel() {
             >
               {isBusy ? statusLabel : "실행"}
             </button>
+            {isBusy && procNote && (
+              <p className="text-xs mt-2 text-center" style={{ color: "var(--text-secondary)" }}>{procNote}</p>
+            )}
             {errorMsg && <p className="text-xs mt-3" style={{ color: "#f87171" }}>{errorMsg}</p>}
           </section>
         )}
@@ -752,9 +994,9 @@ export default function AiEditPanel() {
                 <a href={result.url} download className="inline-block mt-3 text-xs px-3 py-1.5 rounded-lg text-white" style={{ background: "var(--accent)" }}>
                   다운로드 ({result.transparent ? "webm" : "mp4"})
                 </a>
-                {!result.transparent && (
+                {result.bgFilled && (
                   <p className="text-[11px] mt-2" style={{ color: "var(--text-secondary)" }}>
-                    대상만 남기고 배경은 검정으로 채워집니다(mp4는 투명 미지원). 전체가 검정이면 대상이 검출되지 않은 것이니, 영문 개념어(person, dog, car…)로 다시 시도하세요. 투명 배경이 필요하면 “자동(전체 배경)”을 쓰세요.
+                    mp4(h264)는 투명을 지원하지 않아 제거된 배경이 단색으로 채워집니다. 다른 배경 위에 합성하려면 출력 형식을 “투명 webm”으로 선택하세요.
                   </p>
                 )}
               </div>
