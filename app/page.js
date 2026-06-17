@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import AiEditPanel from "./components/AiEditPanel";
 
 const MODE_OPTIONS = [
   { value: "video", label: "AI Video" },
   { value: "edit", label: "AI Image" },
+  { value: "tools", label: "AI Edit" },
 ];
 
 const DURATION_OPTIONS = [
@@ -382,28 +384,35 @@ export default function Home() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="text-xs px-3 py-1.5 rounded-lg transition-all"
-            style={{
-              background: showHistory ? "var(--accent)" : "var(--bg-hover)",
-              color: showHistory ? "#fff" : "var(--text-secondary)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            이력 {mode === "video"
-              ? history.length > 0 && `(${history.length})`
-              : editHistory.length > 0 && `(${editHistory.length})`}
-          </button>
-          <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
-            {mode === "video"
-              ? MODEL_OPTIONS.find((m) => m.value === model)?.label || "Kling"
-              : EDIT_MODEL_OPTIONS.find((m) => m.value === editModel)?.label || "Kontext"}
-          </span>
+          {mode !== "tools" && (
+            <>
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className="text-xs px-3 py-1.5 rounded-lg transition-all"
+                style={{
+                  background: showHistory ? "var(--accent)" : "var(--bg-hover)",
+                  color: showHistory ? "#fff" : "var(--text-secondary)",
+                  border: "1px solid var(--border)",
+                }}
+              >
+                이력 {mode === "video"
+                  ? history.length > 0 && `(${history.length})`
+                  : editHistory.length > 0 && `(${editHistory.length})`}
+              </button>
+              <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                {mode === "video"
+                  ? MODEL_OPTIONS.find((m) => m.value === model)?.label || "Kling"
+                  : EDIT_MODEL_OPTIONS.find((m) => m.value === editModel)?.label || "Kontext"}
+              </span>
+            </>
+          )}
         </div>
       </header>
 
       {/* Main */}
+      {mode === "tools" ? (
+        <AiEditPanel />
+      ) : (
       <main className="px-6 py-4" style={{ height: "calc(100vh - 57px)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div className="text-center mb-4">
           <h1 className="text-2xl font-bold tracking-tight mb-1">
@@ -1035,6 +1044,7 @@ export default function Home() {
           </div>
         )}
       </main>
+      )}
     </div>
   );
 }

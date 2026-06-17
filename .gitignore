@@ -15,3 +15,6 @@ npm-debug.log*
 
 # misc
 .DS_Store
+
+# oh-my-claudecode
+.omc/
