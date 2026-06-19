@@ -13,7 +13,7 @@ export async function POST(request) {
     if (!def) {
       return Response.json({ error: "알 수 없는 도구입니다." }, { status: 400 });
     }
-    if (!file_url) {
+    if (def.needsFile !== false && !file_url) {
       return Response.json({ error: "file_url은 필수입니다." }, { status: 400 });
     }
     if (file_kind && !def.accepts.includes(file_kind)) {

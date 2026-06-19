@@ -57,6 +57,30 @@ export const TOOLS = {
     normalize: (data) => ({ kind: "video", url: data?.video?.url, transparent: false }),
   },
 
+  // BGM — 영상에 바로 입히기 (MMAudio): 장면 동기화 오디오가 입혀진 영상 반환
+  "bgm-mmaudio": {
+    model: "fal-ai/mmaudio-v2",
+    accepts: ["video"],
+    buildInput: ({ fileUrl, prompt, options }) => ({
+      video_url: fileUrl,
+      prompt: prompt || "background music",
+      duration: options?.duration || 8,
+    }),
+    normalize: (data) => ({ kind: "video", url: data?.video?.url, transparent: false }),
+  },
+
+  // BGM — 음악 트랙 생성 (CassetteAI, 저작권 프리). 영상 파일 불필요(프롬프트만)
+  "bgm-music": {
+    model: "cassetteai/music-generator",
+    accepts: ["video"],
+    needsFile: false,
+    buildInput: ({ prompt, options }) => ({
+      prompt: prompt || "calm cinematic background music",
+      duration: options?.duration || 30,
+    }),
+    normalize: (data) => ({ kind: "audio", url: data?.audio_file?.url }),
+  },
+
   // 첫 프레임에서 마스크 추출 (SAM3) — vace-edit 의 mask_image_url 공급용
   "cutout-mask": {
     model: "fal-ai/sam-3/image",

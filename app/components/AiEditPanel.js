@@ -34,6 +34,12 @@ const FEATURES = [
     desc: "배경 생성·오브젝트 추가/교체 (생성형)",
     accepts: ["video"],
   },
+  {
+    id: "bgm",
+    label: "배경음악 (BGM)",
+    desc: "화면 분위기에 맞는 저작권 프리 음악 생성",
+    accepts: ["video"],
+  },
 ];
 
 const KIND_LABEL = { image: "이미지", video: "영상", audio: "오디오" };
@@ -130,6 +136,26 @@ const GUIDE = [
     note:
       "생성형(diffusion) 편집이라 원본 픽셀이 그대로 보존되지 않음(인물 디테일 미세 변화 가능). 초당 과금·처리시간 김. VACE는 출력 프레임 수가 고정이라 길이가 원본과 다를 수 있음.",
   },
+  {
+    title: "배경음악 (BGM) — 화면 분위기 매칭, 저작권 프리",
+    items: [
+      {
+        mode: "음악 트랙 · 분석",
+        model: "fal-ai (vision) + cassetteai/music-generator",
+        input:
+          "1) 프레임 샘플(클라 canvas) → 2) /api/tools/music-prompt 로 음악 브리프 생성 → 3) prompt + duration(초)",
+        output: "audio_file.url — WAV 음악 트랙 (곰믹스가 영상 아래 트랙으로 추가)",
+      },
+      {
+        mode: "영상에 입히기",
+        model: "fal-ai/mmaudio-v2",
+        input: "video_url + prompt + duration(최대 30초)",
+        output: "video.url — 오디오가 입혀진 mp4 (장면 동기화)",
+      },
+    ],
+    note:
+      "AI 생성이라 저작권 프리(상업적 이용 가능). 음악 브리프는 비워두면 화면 분석(OpenAI vision)으로 자동 생성, 직접 입력도 가능. 음악 트랙 방식은 mux를 안 하므로 합성은 곰믹스 측.",
+  },
 ];
 
 function detectKind(file) {
@@ -219,6 +245,9 @@ export default function AiEditPanel() {
   const [veditPrompt, setVeditPrompt] = useState("");
   const [veditRegion, setVeditRegion] = useState("");
   const [procNote, setProcNote] = useState("");
+  const [bgmMode, setBgmMode] = useState("music"); // music(트랙) | mmaudio(영상에 입힘)
+  const [bgmPrompt, setBgmPrompt] = useState("");
+  const [usedPrompt, setUsedPrompt] = useState(""); // 실제 사용된(분석된) 음악 프롬프트
 
   // 결과 보조 상태
   const [minSilence, setMinSilence] = useState(0.6);
@@ -256,6 +285,9 @@ export default function AiEditPanel() {
     setVeditPrompt("");
     setVeditRegion("");
     setProcNote("");
+    setBgmMode("music");
+    setBgmPrompt("");
+    setUsedPrompt("");
   };
 
   const acceptFile = (f) => {
@@ -468,9 +500,99 @@ export default function AiEditPanel() {
     }
   };
 
+  // 영상에서 여러 프레임을 dataURL 로 샘플 + 길이(초) 반환
+  const sampleFrames = (f, count = 3) =>
+    new Promise((resolve, reject) => {
+      const v = document.createElement("video");
+      v.preload = "auto";
+      v.muted = true;
+      v.src = URL.createObjectURL(f);
+      v.onloadedmetadata = async () => {
+        const dur = v.duration || 1;
+        const times = Array.from({ length: count }, (_, i) =>
+          Math.min(dur - 0.05, (dur * (i + 0.5)) / count)
+        );
+        const frames = [];
+        const c = document.createElement("canvas");
+        const grab = (t) =>
+          new Promise((res) => {
+            const onSeek = () => {
+              c.width = Math.min(v.videoWidth, 512);
+              c.height = Math.round((c.width / v.videoWidth) * v.videoHeight);
+              c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+              frames.push(c.toDataURL("image/jpeg", 0.7));
+              v.removeEventListener("seeked", onSeek);
+              res();
+            };
+            v.addEventListener("seeked", onSeek);
+            v.currentTime = t;
+          });
+        try {
+          for (const t of times) await grab(t);
+          URL.revokeObjectURL(v.src);
+          resolve({ frames, duration: dur });
+        } catch (e) {
+          reject(e);
+        }
+      };
+      v.onerror = () => reject(new Error("영상 로드 실패"));
+    });
+
+  const handleBgm = async () => {
+    setErrorMsg("");
+    setResult(null);
+    setAiRemove(null);
+    setRunMode("none");
+    setUsedPrompt("");
+    try {
+      let prompt = bgmPrompt.trim();
+
+      // 프롬프트 미입력 시 화면 분석으로 자동 생성
+      setStatus("polling");
+      setProcNote("화면 분석 중…");
+      const { frames, duration } = await sampleFrames(file, 3);
+      if (!prompt) {
+        const res = await fetch("/api/tools/music-prompt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frames }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        prompt = data.prompt;
+      }
+      setUsedPrompt(prompt);
+
+      const secs = Math.max(1, Math.round(duration));
+      if (bgmMode === "mmaudio") {
+        setProcNote("영상에 음악 입히는 중… (MMAudio)");
+        const videoUrl = await uploadFile(file);
+        const r = await submitAndWait("bgm-mmaudio", videoUrl, {
+          prompt,
+          options: { duration: Math.min(secs, 30) },
+        });
+        setResult(r);
+      } else {
+        setProcNote("음악 트랙 생성 중… (CassetteAI)");
+        const r = await submitAndWait("bgm-music", "", {
+          prompt,
+          options: { duration: Math.min(secs, 180) },
+        });
+        setResult(r);
+      }
+      setProcNote("");
+      setStatus("completed");
+    } catch (err) {
+      setProcNote("");
+      setErrorMsg(err.message || "BGM 생성 실패");
+      setStatus("error");
+    }
+  };
+
   const handleRun = async () => {
     if (!file || !feature) return;
     if (feature.id === "video-edit") return handleVideoEdit();
+    if (feature.id === "bgm") return handleBgm();
     let toolKey;
     let prompt = "";
     let options;
@@ -957,6 +1079,44 @@ export default function AiEditPanel() {
               </div>
             )}
 
+            {/* 배경음악 (BGM) */}
+            {feature.id === "bgm" && (
+              <div className="space-y-4">
+                <div className="flex gap-2">
+                  {[
+                    ["music", "음악 트랙 (분석)"],
+                    ["mmaudio", "영상에 입히기"],
+                  ].map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setBgmMode(v)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                      style={{
+                        background: bgmMode === v ? "var(--accent)" : "var(--bg-hover)",
+                        color: bgmMode === v ? "#fff" : "var(--text-secondary)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  value={bgmPrompt}
+                  onChange={(e) => setBgmPrompt(e.target.value)}
+                  placeholder="분위기 직접 지정 (비우면 화면 분석으로 자동, 예: upbeat lo-fi hip hop)"
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                  style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                />
+                <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  {bgmMode === "music"
+                    ? "화면을 분석해 어울리는 저작권 프리 음악 트랙을 생성합니다(곰믹스에서 영상 아래 트랙으로 추가)."
+                    : "MMAudio로 영상에 직접 오디오를 입혀 반환합니다(장면 동기화, 최대 30초)."}
+                  {" "}AI 생성이라 저작권 프리(상업적 이용 가능).
+                </p>
+              </div>
+            )}
+
             <button
               onClick={handleRun}
               disabled={isBusy}
@@ -976,6 +1136,12 @@ export default function AiEditPanel() {
         {result && (
           <section className="rounded-2xl p-6" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
             <h2 className="text-sm font-semibold mb-3">4. 결과</h2>
+
+            {usedPrompt && (
+              <p className="text-[11px] mb-3 px-3 py-2 rounded-lg" style={{ background: "var(--bg-hover)", color: "var(--text-secondary)" }}>
+                🎵 사용된 음악 브리프: {usedPrompt}
+              </p>
+            )}
 
             {result.kind === "image" && (
               <div>
