@@ -76,7 +76,7 @@ export const TOOLS = {
     needsFile: false,
     buildInput: ({ prompt, options }) => ({
       prompt: prompt || "calm cinematic background music",
-      duration: options?.duration || 30,
+      duration: Math.max(10, Math.min(options?.duration || 30, 180)), // CassetteAI: 10~180s
     }),
     normalize: (data) => ({ kind: "audio", url: data?.audio_file?.url }),
   },

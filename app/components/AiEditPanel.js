@@ -576,7 +576,7 @@ export default function AiEditPanel() {
         setProcNote("음악 트랙 생성 중… (CassetteAI)");
         const r = await submitAndWait("bgm-music", "", {
           prompt,
-          options: { duration: Math.min(secs, 180) },
+          options: { duration: Math.max(10, Math.min(secs, 180)) },
         });
         setResult(r);
       }
