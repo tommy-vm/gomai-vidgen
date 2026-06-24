@@ -40,6 +40,12 @@ const FEATURES = [
     desc: "화면 분위기에 맞는 저작권 프리 음악 생성",
     accepts: ["video"],
   },
+  {
+    id: "shortform",
+    label: "숏폼 추천",
+    desc: "긴 영상에서 하이라이트 클립 자동 추천",
+    accepts: ["video"],
+  },
 ];
 
 const KIND_LABEL = { image: "이미지", video: "영상", audio: "오디오" };
@@ -157,6 +163,20 @@ const GUIDE = [
     note:
       "AI 생성이라 저작권 프리(상업적 이용 가능). 음악 브리프는 비워두면 화면 분석(OpenAI vision)으로 자동 생성, 직접 입력도 가능. '영상에 믹스'는 서버 모델이 아니라 브라우저 ffmpeg.wasm 으로 합성(원본 음성 보존 + 회전 보존). 곰 앱에선 동일 로직을 네이티브 ffmpeg(c:v copy, amix)로 구현 권장.",
   },
+  {
+    title: "숏폼 추천 (하이라이트 클립)",
+    items: [
+      {
+        mode: "구간 추천",
+        model: "fal-ai/whisper(segment) + LLM",
+        input:
+          "1) whisper로 문장 단위 자막+타임스탬프 → 2) /api/tools/shortform 에 segments+개수+최대길이 전달",
+        output: "clips:[{start,end,title,caption}] — 추천 클립 리스트",
+      },
+    ],
+    note:
+      "영상을 자르지 않고 추천 구간(초)+제목+자막만 반환. 곰믹스가 좌표로 클립 컷 → 세로 크롭·자막 번인은 곰 측 타임라인에서 처리. (스마트컷 내용기반과 같은 whisper+LLM 엔진)",
+  },
 ];
 
 function detectKind(file) {
@@ -249,6 +269,8 @@ export default function AiEditPanel() {
   const [bgmMode, setBgmMode] = useState("track"); // track(음악 트랙) | video(영상에 믹스)
   const [bgmPrompt, setBgmPrompt] = useState("");
   const [usedPrompt, setUsedPrompt] = useState(""); // 실제 사용된(분석된) 음악 프롬프트
+  const [sfCount, setSfCount] = useState(3); // 숏폼 추천 개수
+  const [sfMaxLen, setSfMaxLen] = useState(60); // 숏폼 클립 최대 길이(초)
 
   // 결과 보조 상태
   const [minSilence, setMinSilence] = useState(0.6);
@@ -290,6 +312,8 @@ export default function AiEditPanel() {
     setBgmMode("track");
     setBgmPrompt("");
     setUsedPrompt("");
+    setSfCount(3);
+    setSfMaxLen(60);
   };
 
   const acceptFile = (f) => {
@@ -649,10 +673,52 @@ export default function AiEditPanel() {
     }
   };
 
+  const handleShortform = async () => {
+    setErrorMsg("");
+    setResult(null);
+    setAiRemove(null);
+    setRunMode("none");
+    try {
+      setStatus("uploading");
+      setProcNote("영상 업로드 중…");
+      const videoUrl = await uploadFile(file);
+
+      setStatus("polling");
+      setProcNote("음성 인식 중… (whisper)");
+      const tr = await submitAndWait("smart-cut", videoUrl, {
+        options: { chunkLevel: "segment" },
+      });
+      const segments = (tr?.chunks || []).map((c) => ({
+        start: c.timestamp[0],
+        end: c.timestamp[1],
+        text: c.text,
+      }));
+      if (!segments.length) throw new Error("자막을 추출하지 못했습니다 (음성이 없는 영상일 수 있음).");
+
+      setProcNote("하이라이트 클립 선별 중…");
+      const res = await fetch("/api/tools/shortform", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ segments, target_count: sfCount, max_len: sfMaxLen }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setResult({ kind: "shortform", clips: data.clips || [], source: file?.name });
+      setProcNote("");
+      setStatus("completed");
+    } catch (err) {
+      setProcNote("");
+      setErrorMsg(err.message || "숏폼 추천 실패");
+      setStatus("error");
+    }
+  };
+
   const handleRun = async () => {
     if (!file || !feature) return;
     if (feature.id === "video-edit") return handleVideoEdit();
     if (feature.id === "bgm") return handleBgm();
+    if (feature.id === "shortform") return handleShortform();
     let toolKey;
     let prompt = "";
     let options;
@@ -1179,6 +1245,28 @@ export default function AiEditPanel() {
               </div>
             )}
 
+            {/* 숏폼 추천 */}
+            {feature.id === "shortform" && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                    추천 클립 수: {sfCount}개
+                    <input type="range" min="1" max="10" step="1" value={sfCount}
+                      onChange={(e) => setSfCount(parseInt(e.target.value))} className="w-full mt-1" />
+                  </label>
+                  <label className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                    클립 최대 길이: {sfMaxLen}초
+                    <input type="range" min="15" max="90" step="5" value={sfMaxLen}
+                      onChange={(e) => setSfMaxLen(parseInt(e.target.value))} className="w-full mt-1" />
+                  </label>
+                </div>
+                <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  음성을 인식해 하이라이트 구간을 추천합니다. 결과는 구간(초)+제목+자막 리스트로,
+                  곰믹스가 그 좌표로 클립을 잘라 숏폼을 만듭니다(세로 크롭·자막 번인은 곰 측).
+                </p>
+              </div>
+            )}
+
             <button
               onClick={handleRun}
               disabled={isBusy}
@@ -1234,6 +1322,50 @@ export default function AiEditPanel() {
               <div>
                 <audio src={result.url} controls className="w-full" />
                 <a href={result.url} download className="inline-block mt-3 text-xs px-3 py-1.5 rounded-lg text-white" style={{ background: "var(--accent)" }}>다운로드</a>
+              </div>
+            )}
+
+            {result.kind === "shortform" && (
+              <div className="space-y-3">
+                {result.clips.length === 0 ? (
+                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                    추천할 만한 하이라이트를 찾지 못했습니다.
+                  </p>
+                ) : (
+                  <>
+                    {result.clips.map((c, i) => (
+                      <div key={i} className="rounded-xl p-3" style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium">{i + 1}. {c.title}</span>
+                          <span className="text-[11px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--bg-primary)", color: "var(--text-secondary)" }}>
+                            {fmtTime(c.start)}–{fmtTime(c.end)} ({(c.end - c.start).toFixed(0)}s)
+                          </span>
+                        </div>
+                        {c.caption && (
+                          <div className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>{c.caption}</div>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => {
+                        const payload = { source: result.source, unit: "seconds", clips: result.clips };
+                        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+                        const a = document.createElement("a");
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `${result.source || "shortform"}.clips.json`;
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                      }}
+                      className="text-xs px-3 py-1.5 rounded-lg text-white"
+                      style={{ background: "var(--accent)" }}
+                    >
+                      클립 리스트 JSON 다운로드
+                    </button>
+                    <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                      곰믹스는 이 구간(초)으로 클립을 잘라 숏폼을 생성합니다. 세로 크롭·자막 번인은 곰 측 타임라인에서.
+                    </p>
+                  </>
+                )}
               </div>
             )}
 
