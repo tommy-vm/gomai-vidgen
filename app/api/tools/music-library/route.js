@@ -20,22 +20,37 @@ export async function GET(request) {
       return Response.json({ error: "tags가 필요합니다." }, { status: 400 });
     }
 
-    const url = new URL("https://api.jamendo.com/v3.0/tracks/");
-    url.searchParams.set("client_id", clientId);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("limit", String(limit));
-    url.searchParams.set("fuzzytags", tags.replace(/\s+/g, ""));
-    url.searchParams.set("vocalinstrumental", "instrumental"); // BGM은 보컬 없는 곡
-    url.searchParams.set("order", "popularity_total");
-    url.searchParams.set("audioformat", "mp32");
-    url.searchParams.set("include", "musicinfo licenses");
-    url.searchParams.set("audiodlallowed", "true"); // 다운로드 허용 트랙만
+    // fuzzytags 는 태그를 AND 로 매칭 → 3개 이상이면 결과 0인 경우가 많음.
+    // 태그 수를 점진적으로 줄이며 결과가 나올 때까지 재시도.
+    const tagList = tags
+      .split(",")
+      .map((t) => t.trim().toLowerCase().replace(/\s+/g, ""))
+      .filter(Boolean);
 
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) {
-      return Response.json({ error: "Jamendo 검색 실패" }, { status: 502 });
+    const query = async (tagSet) => {
+      const url = new URL("https://api.jamendo.com/v3.0/tracks/");
+      url.searchParams.set("client_id", clientId);
+      url.searchParams.set("format", "json");
+      url.searchParams.set("limit", String(limit));
+      url.searchParams.set("fuzzytags", tagSet.join(","));
+      url.searchParams.set("order", "popularity_total");
+      url.searchParams.set("audioformat", "mp32");
+      url.searchParams.set("include", "musicinfo licenses");
+      // 상업적 이용 가능 트랙만: NC(비상업)·ND(변경금지=믹스 시 문제) 제외 → BY / BY-SA / CC0
+      url.searchParams.set("ccnc", "false");
+      url.searchParams.set("ccnd", "false");
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error("Jamendo 검색 실패");
+      return r.json();
+    };
+
+    let data = { results: [] };
+    // 2개 → 1개 순으로 시도 (2개가 관련성/결과수 균형이 좋음)
+    for (const k of [Math.min(2, tagList.length), 1]) {
+      if (k < 1) break;
+      data = await query(tagList.slice(0, k));
+      if (data?.results?.length) break;
     }
-    const data = await res.json();
 
     const tracks = (data?.results || []).map((t) => {
       const lic = t.license_ccurl || "";
