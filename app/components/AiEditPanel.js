@@ -146,11 +146,18 @@ const GUIDE = [
     title: "배경음악 (BGM) — 화면 분위기 매칭, 저작권 프리",
     items: [
       {
-        mode: "음악 트랙만",
+        mode: "라이브러리 · 추천",
+        model: "OpenAI vision + Jamendo API",
+        input:
+          "1) 프레임 샘플 → 2) /api/tools/music-prompt 로 무드 태그 → 3) /api/tools/music-library?tags= 로 Jamendo 검색(instrumental)",
+        output: "tracks:[{title,artist,url,license,commercial_safe}] — CC 음악 후보. 끊김 없는 전문 트랙",
+      },
+      {
+        mode: "AI 생성 · 트랙",
         model: "OpenAI vision + cassetteai/music-generator",
         input:
-          "1) 프레임 샘플(클라 canvas) → 2) /api/tools/music-prompt 로 음악 브리프 생성 → 3) prompt + duration(10~180s)",
-        output: "audio_file.url — WAV 음악 트랙 (곰믹스가 영상 아래 트랙으로 추가)",
+          "1) 프레임 샘플 → 2) music-prompt 로 음악 브리프 → 3) prompt + duration(10~180s)",
+        output: "audio_file.url — WAV 음악 트랙 (작곡 퀄리티 편차 가능)",
       },
       {
         mode: "영상에 믹스",
@@ -161,7 +168,7 @@ const GUIDE = [
       },
     ],
     note:
-      "AI 생성이라 저작권 프리(상업적 이용 가능). 음악 브리프는 비워두면 화면 분석(OpenAI vision)으로 자동 생성, 직접 입력도 가능. '영상에 믹스'는 서버 모델이 아니라 브라우저 ffmpeg.wasm 으로 합성(원본 음성 보존 + 회전 보존). 곰 앱에선 동일 로직을 네이티브 ffmpeg(c:v copy, amix)로 구현 권장.",
+      "라이브러리(Jamendo)는 JAMENDO_CLIENT_ID 필요(무료). CC 라이선스라 상업적 사용은 CC BY/CC0 위주 + 저작자 표시 필요(응답의 license/attribution 노출). '영상에 믹스'는 서버 모델이 아니라 브라우저 ffmpeg.wasm 합성(원본 음성+회전 보존) → 곰 앱은 네이티브 ffmpeg(c:v copy, amix)로 동일 구현 권장.",
   },
   {
     title: "숏폼 추천 (하이라이트 클립)",
@@ -266,6 +273,7 @@ export default function AiEditPanel() {
   const [veditPrompt, setVeditPrompt] = useState("");
   const [veditRegion, setVeditRegion] = useState("");
   const [procNote, setProcNote] = useState("");
+  const [bgmSource, setBgmSource] = useState("library"); // library(Jamendo) | generate(CassetteAI)
   const [bgmMode, setBgmMode] = useState("track"); // track(음악 트랙) | video(영상에 믹스)
   const [bgmPrompt, setBgmPrompt] = useState("");
   const [usedPrompt, setUsedPrompt] = useState(""); // 실제 사용된(분석된) 음악 프롬프트
@@ -309,6 +317,7 @@ export default function AiEditPanel() {
     setVeditPrompt("");
     setVeditRegion("");
     setProcNote("");
+    setBgmSource("library");
     setBgmMode("track");
     setBgmPrompt("");
     setUsedPrompt("");
@@ -626,27 +635,43 @@ export default function AiEditPanel() {
     setRunMode("none");
     setUsedPrompt("");
     try {
-      let prompt = bgmPrompt.trim();
-
-      // 프롬프트 미입력 시 화면 분석으로 자동 생성
       setStatus("polling");
       setProcNote("화면 분석 중…");
       const { frames, duration } = await sampleFrames(file, 3);
-      if (!prompt) {
-        const res = await fetch("/api/tools/music-prompt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        prompt = data.prompt;
+
+      // 화면 분석 → 음악 프롬프트 + 검색 태그 (프롬프트 직접 입력 시 그걸 우선)
+      const manual = bgmPrompt.trim();
+      let prompt = manual;
+      let tags = "";
+      const res = await fetch("/api/tools/music-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frames }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      if (!prompt) prompt = data.prompt;
+      tags = data.tags || "";
+
+      if (bgmSource === "library") {
+        // 라이선스 프리 라이브러리(Jamendo)에서 분위기 매칭 트랙 검색
+        setUsedPrompt(tags);
+        setProcNote("라이브러리 검색 중… (Jamendo)");
+        const lib = await fetch(
+          `/api/tools/music-library?tags=${encodeURIComponent(tags)}&limit=6`
+        );
+        const ld = await lib.json();
+        if (!lib.ok) throw new Error(ld.error);
+        if (!ld.tracks?.length) throw new Error("매칭되는 트랙을 찾지 못했습니다. 다른 분위기로 시도해보세요.");
+        setResult({ kind: "music-list", tracks: ld.tracks });
+        setProcNote("");
+        setStatus("completed");
+        return;
       }
+
+      // AI 생성 (CassetteAI)
       setUsedPrompt(prompt);
-
       const secs = Math.max(1, Math.round(duration));
-
-      // 1) 음악 트랙 생성 (두 모드 공통)
       setProcNote("음악 트랙 생성 중… (CassetteAI)");
       const music = await submitAndWait("bgm-music", "", {
         prompt,
@@ -655,11 +680,8 @@ export default function AiEditPanel() {
       if (!music?.url) throw new Error("음악 생성 실패");
 
       if (bgmMode === "track") {
-        // 음악 트랙만 반환 (곰믹스 타임라인 합성용)
         setResult(music);
       } else {
-        // 2) 원본 영상 아래에 음악 믹스 (브라우저 ffmpeg.wasm)
-        //    영상 스트림은 그대로 복사 → 회전/화질/원본 음성 보존
         setProcNote("영상에 배경음악 믹스 중… (최초 1회 로딩 다소 소요)");
         const outUrl = await muxMusicUnderVideo(file, music.url);
         setResult({ kind: "video", url: outUrl, transparent: false, blob: true });
@@ -668,7 +690,42 @@ export default function AiEditPanel() {
       setStatus("completed");
     } catch (err) {
       setProcNote("");
-      setErrorMsg(err.message || "BGM 생성 실패");
+      setErrorMsg(err.message || "BGM 처리 실패");
+      setStatus("error");
+    }
+  };
+
+  // 라이브러리에서 고른 트랙을 사용 (트랙만 / 영상에 믹스)
+  const useLibraryTrack = async (track) => {
+    setErrorMsg("");
+    if (bgmMode === "track") {
+      setResult({
+        kind: "audio",
+        url: track.url,
+        attribution: track.attribution,
+        license: track.license_url,
+        commercial: track.commercial_safe,
+      });
+      return;
+    }
+    try {
+      setStatus("polling");
+      setProcNote("영상에 배경음악 믹스 중… (최초 1회 로딩 다소 소요)");
+      const outUrl = await muxMusicUnderVideo(file, track.url);
+      setResult({
+        kind: "video",
+        url: outUrl,
+        transparent: false,
+        blob: true,
+        attribution: track.attribution,
+        license: track.license_url,
+        commercial: track.commercial_safe,
+      });
+      setProcNote("");
+      setStatus("completed");
+    } catch (err) {
+      setProcNote("");
+      setErrorMsg(err.message || "영상 믹스 실패");
       setStatus("error");
     }
   };
@@ -1210,6 +1267,28 @@ export default function AiEditPanel() {
             {/* 배경음악 (BGM) */}
             {feature.id === "bgm" && (
               <div className="space-y-4">
+                {/* 소스: 라이브러리(추천) vs AI 생성 */}
+                <div className="flex gap-2">
+                  {[
+                    ["library", "라이브러리 (추천)"],
+                    ["generate", "AI 생성"],
+                  ].map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setBgmSource(v)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                      style={{
+                        background: bgmSource === v ? "var(--accent)" : "var(--bg-hover)",
+                        color: bgmSource === v ? "#fff" : "var(--text-secondary)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 출력: 음악 트랙만 vs 영상에 믹스 */}
                 <div className="flex gap-2">
                   {[
                     ["track", "음악 트랙만"],
@@ -1229,18 +1308,22 @@ export default function AiEditPanel() {
                     </button>
                   ))}
                 </div>
-                <input
-                  value={bgmPrompt}
-                  onChange={(e) => setBgmPrompt(e.target.value)}
-                  placeholder="분위기 직접 지정 (한글 가능, 비우면 화면 분석 자동, 예: 신나는 로파이 힙합)"
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-                />
+
+                {bgmSource === "generate" && (
+                  <input
+                    value={bgmPrompt}
+                    onChange={(e) => setBgmPrompt(e.target.value)}
+                    placeholder="분위기 직접 지정 (한글 가능, 비우면 화면 분석 자동, 예: 신나는 로파이 힙합)"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                  />
+                )}
+
                 <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                  {bgmMode === "track"
-                    ? "화면을 분석해 어울리는 저작권 프리 음악 트랙(WAV)을 생성합니다(곰믹스에서 영상 아래 트랙으로 추가)."
-                    : "음악을 원본 영상 위에 깔아 mp4로 반환합니다. 원본 음성은 그대로 두고 음악만 아래에 믹스(회전·화질 보존). 브라우저에서 합성하며 최초 1회 로딩이 다소 걸립니다."}
-                  {" "}AI 생성이라 저작권 프리(상업적 이용 가능).
+                  {bgmSource === "library"
+                    ? "화면을 분석해 분위기에 맞는 라이선스 프리(CC) 음악을 Jamendo에서 찾아 후보를 보여줍니다. 전문 제작 트랙이라 끊김이 없습니다. 상업적 이용은 CC BY/CC0 위주(저작자 표시 필요)."
+                    : "화면 분석(또는 입력)으로 음악을 AI 생성(CassetteAI)합니다. 저작권 프리지만 작곡 퀄리티 편차가 있을 수 있습니다."}
+                  {bgmMode === "video" ? " · 선택한 곡을 원본 음성 위에 믹스해 mp4로 반환(회전·음성 보존)." : " · 음악 트랙만 반환(곰믹스 타임라인 합성용)."}
                 </p>
               </div>
             )}
@@ -1289,8 +1372,47 @@ export default function AiEditPanel() {
 
             {usedPrompt && (
               <p className="text-[11px] mb-3 px-3 py-2 rounded-lg" style={{ background: "var(--bg-hover)", color: "var(--text-secondary)" }}>
-                🎵 사용된 음악 브리프: {usedPrompt}
+                🎵 분석된 분위기/태그: {usedPrompt}
               </p>
+            )}
+
+            {result.attribution && (
+              <p className="text-[11px] mb-3 px-3 py-2 rounded-lg" style={{ background: "var(--bg-hover)", color: "var(--text-secondary)" }}>
+                🎼 {result.attribution}
+                {result.license && (
+                  <> · <a href={result.license} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>라이선스</a></>
+                )}
+                {!result.commercial && <span style={{ color: "#f0b429" }}> · ⚠ 비상업(NC/ND) 가능성 — 상업적 사용 전 확인</span>}
+                {" "}· 사용 시 저작자 표시 필요할 수 있음
+              </p>
+            )}
+
+            {result.kind === "music-list" && (
+              <div className="space-y-3">
+                <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                  분위기에 맞는 후보 {result.tracks.length}곡. 미리듣고 “사용”을 누르면 {bgmMode === "video" ? "영상에 믹스" : "트랙으로 사용"}합니다.
+                </p>
+                {result.tracks.map((t) => (
+                  <div key={t.id} className="rounded-xl p-3" style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium truncate">{t.title}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--bg-primary)", color: t.commercial_safe ? "var(--text-secondary)" : "#f0b429" }}>
+                        {t.commercial_safe ? "상업 가능(CC BY/0)" : "NC/ND 확인필요"}
+                      </span>
+                    </div>
+                    <div className="text-[11px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{t.artist} · {Math.round(t.duration)}s</div>
+                    <audio src={t.url} controls preload="none" className="w-full mt-2" style={{ height: 32 }} />
+                    <button
+                      onClick={() => useLibraryTrack(t)}
+                      disabled={isBusy}
+                      className="mt-2 text-xs px-3 py-1.5 rounded-lg text-white disabled:opacity-40"
+                      style={{ background: "var(--accent)" }}
+                    >
+                      {bgmMode === "video" ? "이 곡으로 영상에 믹스" : "이 곡 사용"}
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
 
             {result.kind === "image" && (

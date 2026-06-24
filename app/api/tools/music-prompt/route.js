@@ -21,9 +21,11 @@ export async function POST(request) {
           role: "system",
           content:
             "You analyze video frames and design a fitting instrumental background music brief. " +
-            "Return ONLY JSON: {\"prompt\": string, \"mood\": string}. " +
+            "Return ONLY JSON: {\"prompt\": string, \"mood\": string, \"tags\": string}. " +
             "The 'prompt' must be a concise English instrumental music description suitable for a text-to-music model " +
-            "(genre, mood, instruments, tempo/BPM, energy). No lyrics, no copyrighted artist/song names.",
+            "(genre, mood, instruments, tempo/BPM, energy). " +
+            "The 'tags' must be 3-6 lowercase English keywords (comma-separated) for searching a music library " +
+            "(e.g. 'calm,piano,ambient,cinematic'). No lyrics, no copyrighted artist/song names.",
         },
         {
           role: "user",
@@ -43,16 +45,19 @@ export async function POST(request) {
 
     let prompt = "";
     let mood = "";
+    let tags = "";
     try {
       const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
       prompt = typeof parsed.prompt === "string" ? parsed.prompt : "";
       mood = typeof parsed.mood === "string" ? parsed.mood : "";
+      tags = typeof parsed.tags === "string" ? parsed.tags : "";
     } catch {
       /* noop */
     }
     if (!prompt) prompt = "calm cinematic ambient background music, soft piano and strings, slow tempo";
+    if (!tags) tags = "calm,ambient,cinematic,piano";
 
-    return Response.json({ prompt, mood });
+    return Response.json({ prompt, mood, tags });
   } catch (error) {
     console.error("Music prompt error:", error);
     return Response.json(

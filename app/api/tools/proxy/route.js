@@ -2,7 +2,7 @@
 // FAL 미디어(오디오 등)를 브라우저로 그대로 전달 — ffmpeg.wasm 믹싱 시 CORS 회피용
 export const dynamic = "force-dynamic";
 
-const ALLOWED_HOSTS = ["fal.media", "v3.fal.media", "v3b.fal.media"];
+const ALLOWED_HOSTS = ["fal.media", "v3.fal.media", "v3b.fal.media", "jamendo.com"];
 
 export async function GET(request) {
   try {
