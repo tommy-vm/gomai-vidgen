@@ -140,21 +140,22 @@ const GUIDE = [
     title: "배경음악 (BGM) — 화면 분위기 매칭, 저작권 프리",
     items: [
       {
-        mode: "음악 트랙 · 분석",
-        model: "fal-ai (vision) + cassetteai/music-generator",
+        mode: "음악 트랙만",
+        model: "OpenAI vision + cassetteai/music-generator",
         input:
-          "1) 프레임 샘플(클라 canvas) → 2) /api/tools/music-prompt 로 음악 브리프 생성 → 3) prompt + duration(초)",
+          "1) 프레임 샘플(클라 canvas) → 2) /api/tools/music-prompt 로 음악 브리프 생성 → 3) prompt + duration(10~180s)",
         output: "audio_file.url — WAV 음악 트랙 (곰믹스가 영상 아래 트랙으로 추가)",
       },
       {
-        mode: "영상에 입히기",
-        model: "fal-ai/mmaudio-v2",
-        input: "video_url + prompt + duration(최대 30초)",
-        output: "video.url — 오디오가 입혀진 mp4 (장면 동기화)",
+        mode: "영상에 믹스",
+        model: "위 음악 트랙 + ffmpeg.wasm (브라우저 합성)",
+        input:
+          "원본 영상 + 음악 → amix(원본 음성 유지, 음악 volume↓), -c:v copy(영상 스트림 복사)",
+        output: "mp4 — 원본 음성 위에 BGM, 회전·화질 보존",
       },
     ],
     note:
-      "AI 생성이라 저작권 프리(상업적 이용 가능). 음악 브리프는 비워두면 화면 분석(OpenAI vision)으로 자동 생성, 직접 입력도 가능. 음악 트랙 방식은 mux를 안 하므로 합성은 곰믹스 측.",
+      "AI 생성이라 저작권 프리(상업적 이용 가능). 음악 브리프는 비워두면 화면 분석(OpenAI vision)으로 자동 생성, 직접 입력도 가능. '영상에 믹스'는 서버 모델이 아니라 브라우저 ffmpeg.wasm 으로 합성(원본 음성 보존 + 회전 보존). 곰 앱에선 동일 로직을 네이티브 ffmpeg(c:v copy, amix)로 구현 권장.",
   },
 ];
 
@@ -245,7 +246,7 @@ export default function AiEditPanel() {
   const [veditPrompt, setVeditPrompt] = useState("");
   const [veditRegion, setVeditRegion] = useState("");
   const [procNote, setProcNote] = useState("");
-  const [bgmMode, setBgmMode] = useState("music"); // music(트랙) | mmaudio(영상에 입힘)
+  const [bgmMode, setBgmMode] = useState("track"); // track(음악 트랙) | video(영상에 믹스)
   const [bgmPrompt, setBgmPrompt] = useState("");
   const [usedPrompt, setUsedPrompt] = useState(""); // 실제 사용된(분석된) 음악 프롬프트
 
@@ -260,6 +261,7 @@ export default function AiEditPanel() {
   const inputRef = useRef(null);
   const pollingRef = useRef(null);
   const runCfgRef = useRef({});
+  const ffmpegRef = useRef(null);
 
   useEffect(() => () => pollingRef.current && clearInterval(pollingRef.current), []);
 
@@ -285,7 +287,7 @@ export default function AiEditPanel() {
     setVeditPrompt("");
     setVeditRegion("");
     setProcNote("");
-    setBgmMode("music");
+    setBgmMode("track");
     setBgmPrompt("");
     setUsedPrompt("");
   };
@@ -458,7 +460,7 @@ export default function AiEditPanel() {
     const prompt = veditPrompt.trim();
     if (!prompt) return setErrorMsg("편집 프롬프트를 입력하세요.");
     if (veditMode === "precise" && !veditRegion.trim()) {
-      return setErrorMsg("정밀 제어는 대상(마스크) 텍스트가 필요합니다 (영문, 예: person).");
+      return setErrorMsg("정밀 제어는 대상(마스크) 텍스트가 필요합니다 (한글 가능, 예: 사람).");
     }
     setErrorMsg("");
     setResult(null);
@@ -483,7 +485,7 @@ export default function AiEditPanel() {
           prompt: veditRegion.trim(),
           file_kind: "image",
         });
-        if (!mask?.url) throw new Error("마스크 생성 실패 — 대상어(영문)를 바꿔보세요.");
+        if (!mask?.url) throw new Error("마스크 생성 실패 — 대상어를 바꿔보세요.");
         setProcNote("마스크 영역 생성형 편집 중… (수 분 소요)");
         const r = await submitAndWait("vace-edit", videoUrl, {
           prompt,
@@ -538,6 +540,61 @@ export default function AiEditPanel() {
       v.onerror = () => reject(new Error("영상 로드 실패"));
     });
 
+  // ffmpeg.wasm 지연 로드 (단일 스레드 코어 — COOP/COEP 불필요)
+  const loadFfmpeg = async () => {
+    if (ffmpegRef.current) return ffmpegRef.current;
+    const [{ FFmpeg }, { toBlobURL, fetchFile }] = await Promise.all([
+      import("@ffmpeg/ffmpeg"),
+      import("@ffmpeg/util"),
+    ]);
+    const ff = new FFmpeg();
+    const base = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+    await ff.load({
+      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+    });
+    ffmpegRef.current = { ff, fetchFile };
+    return ffmpegRef.current;
+  };
+
+  // 원본 영상 위에 음악을 깔아 믹스. 영상 스트림은 copy(회전·화질 보존),
+  // 원본 음성이 있으면 그 아래에 음악을 낮춰서 합성. 결과 mp4 objectURL 반환.
+  const muxMusicUnderVideo = async (videoFile, musicUrl) => {
+    const { ff, fetchFile } = await loadFfmpeg();
+    await ff.writeFile("in.mp4", await fetchFile(videoFile));
+    // 음악은 프록시 경유로 받아 CORS 회피
+    await ff.writeFile(
+      "music.wav",
+      await fetchFile(`/api/tools/proxy?url=${encodeURIComponent(musicUrl)}`)
+    );
+
+    // 원본 음성 + 음악(볼륨↓) 믹스. 원본 음성은 normalize=0 으로 그대로 유지.
+    const mixArgs = [
+      "-i", "in.mp4",
+      "-i", "music.wav",
+      "-filter_complex",
+      "[1:a]volume=0.35[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]",
+      "-map", "0:v", "-map", "[a]",
+      "-c:v", "copy", "-shortest", "out.mp4",
+    ];
+    let code = await ff.exec(mixArgs);
+
+    // 원본에 오디오 트랙이 없으면 위 필터 실패 → 음악만 입히기로 폴백
+    if (code !== 0) {
+      const musicOnly = [
+        "-i", "in.mp4",
+        "-i", "music.wav",
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "copy", "-shortest", "out.mp4",
+      ];
+      code = await ff.exec(musicOnly);
+      if (code !== 0) throw new Error("영상 믹스 실패 (ffmpeg)");
+    }
+
+    const data = await ff.readFile("out.mp4");
+    return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+  };
+
   const handleBgm = async () => {
     setErrorMsg("");
     setResult(null);
@@ -564,21 +621,24 @@ export default function AiEditPanel() {
       setUsedPrompt(prompt);
 
       const secs = Math.max(1, Math.round(duration));
-      if (bgmMode === "mmaudio") {
-        setProcNote("영상에 음악 입히는 중… (MMAudio)");
-        const videoUrl = await uploadFile(file);
-        const r = await submitAndWait("bgm-mmaudio", videoUrl, {
-          prompt,
-          options: { duration: Math.min(secs, 30) },
-        });
-        setResult(r);
+
+      // 1) 음악 트랙 생성 (두 모드 공통)
+      setProcNote("음악 트랙 생성 중… (CassetteAI)");
+      const music = await submitAndWait("bgm-music", "", {
+        prompt,
+        options: { duration: Math.max(10, Math.min(secs, 180)) },
+      });
+      if (!music?.url) throw new Error("음악 생성 실패");
+
+      if (bgmMode === "track") {
+        // 음악 트랙만 반환 (곰믹스 타임라인 합성용)
+        setResult(music);
       } else {
-        setProcNote("음악 트랙 생성 중… (CassetteAI)");
-        const r = await submitAndWait("bgm-music", "", {
-          prompt,
-          options: { duration: Math.max(10, Math.min(secs, 180)) },
-        });
-        setResult(r);
+        // 2) 원본 영상 아래에 음악 믹스 (브라우저 ffmpeg.wasm)
+        //    영상 스트림은 그대로 복사 → 회전/화질/원본 음성 보존
+        setProcNote("영상에 배경음악 믹스 중… (최초 1회 로딩 다소 소요)");
+        const outUrl = await muxMusicUnderVideo(file, music.url);
+        setResult({ kind: "video", url: outUrl, transparent: false, blob: true });
       }
       setProcNote("");
       setStatus("completed");
@@ -732,6 +792,8 @@ export default function AiEditPanel() {
             <h2 className="text-sm font-semibold mb-1">곰 연동 개발 가이드</h2>
             <p className="text-xs mb-4" style={{ color: "var(--text-secondary)" }}>
               모든 호출은 FAL Queue 비동기 패턴 권장: <code>submit → status(polling) → result</code>. 입력 파일은 먼저 FAL 스토리지(또는 공개 URL)로 올린 뒤 URL을 전달합니다.
+              <br />
+              <b>프롬프트 한글 지원:</b> 영문만 인식하는 모델(SAM3·bria·bernini·VACE·CassetteAI)은 <code>/api/tools/process</code>에서 한글 감지 시 OpenAI로 영어 자동 번역 후 전달합니다. 사용자/곰 앱은 한글로 입력해도 됩니다.
             </p>
             <div className="space-y-4">
               {GUIDE.map((g) => (
@@ -903,8 +965,8 @@ export default function AiEditPanel() {
                       onChange={(e) => setCutoutText(e.target.value)}
                       placeholder={
                         kind === "video"
-                          ? "남길 대상 — 영문 개념어 필수 (예: person, dog, car)"
-                          : "남길 대상 텍스트 (영문, 예: person) — 또는 아래 이미지 클릭"
+                          ? "남길 대상 (한글 가능, 예: 사람 / person, 강아지, 자동차)"
+                          : "남길 대상 텍스트 (한글 가능, 예: 사람) — 또는 아래 이미지 클릭"
                       }
                       className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                       style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
@@ -976,7 +1038,7 @@ export default function AiEditPanel() {
               <input
                 value={bgPrompt}
                 onChange={(e) => setBgPrompt(e.target.value)}
-                placeholder="새 배경 설명 (예: a sunny beach at golden hour)"
+                placeholder="새 배경 설명 (한글 가능, 예: 노을 지는 해변)"
                 className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                 style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
               />
@@ -1054,7 +1116,7 @@ export default function AiEditPanel() {
                   <input
                     value={veditRegion}
                     onChange={(e) => setVeditRegion(e.target.value)}
-                    placeholder="편집할 대상 — 영문 (예: person, car) · 첫 프레임에서 마스크 자동 추출"
+                    placeholder="편집할 대상 (한글 가능, 예: 사람, 자동차) · 첫 프레임에서 마스크 자동 추출"
                     className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                     style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
                   />
@@ -1064,8 +1126,8 @@ export default function AiEditPanel() {
                   onChange={(e) => setVeditPrompt(e.target.value)}
                   placeholder={
                     veditMode === "fast"
-                      ? "편집 지시 (영문 권장, 예: change background to a sunset beach / add a dog)"
-                      : "대상 영역을 무엇으로 바꿀지 (영문, 예: replace with a red sports car)"
+                      ? "편집 지시 (한글 가능, 예: 배경을 노을 해변으로 바꿔줘 / 강아지 추가)"
+                      : "대상 영역을 무엇으로 바꿀지 (한글 가능, 예: 빨간 스포츠카로 교체)"
                   }
                   className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                   style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
@@ -1084,8 +1146,8 @@ export default function AiEditPanel() {
               <div className="space-y-4">
                 <div className="flex gap-2">
                   {[
-                    ["music", "음악 트랙 (분석)"],
-                    ["mmaudio", "영상에 입히기"],
+                    ["track", "음악 트랙만"],
+                    ["video", "영상에 믹스"],
                   ].map(([v, label]) => (
                     <button
                       key={v}
@@ -1104,14 +1166,14 @@ export default function AiEditPanel() {
                 <input
                   value={bgmPrompt}
                   onChange={(e) => setBgmPrompt(e.target.value)}
-                  placeholder="분위기 직접 지정 (비우면 화면 분석으로 자동, 예: upbeat lo-fi hip hop)"
+                  placeholder="분위기 직접 지정 (한글 가능, 비우면 화면 분석 자동, 예: 신나는 로파이 힙합)"
                   className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                   style={{ background: "var(--bg-primary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
                 />
                 <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                  {bgmMode === "music"
-                    ? "화면을 분석해 어울리는 저작권 프리 음악 트랙을 생성합니다(곰믹스에서 영상 아래 트랙으로 추가)."
-                    : "MMAudio로 영상에 직접 오디오를 입혀 반환합니다(장면 동기화, 최대 30초)."}
+                  {bgmMode === "track"
+                    ? "화면을 분석해 어울리는 저작권 프리 음악 트랙(WAV)을 생성합니다(곰믹스에서 영상 아래 트랙으로 추가)."
+                    : "음악을 원본 영상 위에 깔아 mp4로 반환합니다. 원본 음성은 그대로 두고 음악만 아래에 믹스(회전·화질 보존). 브라우저에서 합성하며 최초 1회 로딩이 다소 걸립니다."}
                   {" "}AI 생성이라 저작권 프리(상업적 이용 가능).
                 </p>
               </div>

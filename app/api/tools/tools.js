@@ -57,19 +57,8 @@ export const TOOLS = {
     normalize: (data) => ({ kind: "video", url: data?.video?.url, transparent: false }),
   },
 
-  // BGM — 영상에 바로 입히기 (MMAudio): 장면 동기화 오디오가 입혀진 영상 반환
-  "bgm-mmaudio": {
-    model: "fal-ai/mmaudio-v2",
-    accepts: ["video"],
-    buildInput: ({ fileUrl, prompt, options }) => ({
-      video_url: fileUrl,
-      prompt: prompt || "background music",
-      duration: options?.duration || 8,
-    }),
-    normalize: (data) => ({ kind: "video", url: data?.video?.url, transparent: false }),
-  },
-
   // BGM — 음악 트랙 생성 (CassetteAI, 저작권 프리). 영상 파일 불필요(프롬프트만)
+  // "영상에 믹스" 모드는 이 트랙을 브라우저 ffmpeg.wasm 로 원본 위에 합성(서버 모델 아님)
   "bgm-music": {
     model: "cassetteai/music-generator",
     accepts: ["video"],
