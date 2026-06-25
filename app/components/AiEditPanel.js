@@ -161,14 +161,14 @@ const GUIDE = [
       },
       {
         mode: "영상에 믹스",
-        model: "위 음악 트랙 + ffmpeg.wasm (브라우저 합성)",
+        model: "위 음악 + 서버 native ffmpeg (/api/tools/mux)",
         input:
           "원본 영상 + 음악 → amix(원본 음성 유지, 음악 volume↓), -c:v copy(영상 스트림 복사)",
         output: "mp4 — 원본 음성 위에 BGM, 회전·화질 보존",
       },
     ],
     note:
-      "라이브러리(Jamendo)는 JAMENDO_CLIENT_ID 필요(무료). CC 라이선스라 상업적 사용은 CC BY/CC0 위주 + 저작자 표시 필요(응답의 license/attribution 노출). '영상에 믹스'는 서버 모델이 아니라 브라우저 ffmpeg.wasm 합성(원본 음성+회전 보존) → 곰 앱은 네이티브 ffmpeg(c:v copy, amix)로 동일 구현 권장.",
+      "라이브러리(Jamendo)는 JAMENDO_CLIENT_ID 필요(무료). CC 라이선스라 상업적 사용은 CC BY/CC0 위주 + 저작자 표시 필요(응답의 license/attribution 노출). '영상에 믹스'는 서버 native ffmpeg(/api/tools/mux)로 합성: -c:v copy(회전·화질 보존) + amix normalize=0(원본 음성 유지). ⚠️ ffmpeg 바이너리 필요 → Vercel 서버리스 미동작(로컬/자체호스팅 전용). 곰 앱은 동일 ffmpeg 로직 네이티브 구현.",
   },
   {
     title: "숏폼 추천 (하이라이트 클립)",
@@ -291,7 +291,6 @@ export default function AiEditPanel() {
   const inputRef = useRef(null);
   const pollingRef = useRef(null);
   const runCfgRef = useRef({});
-  const ffmpegRef = useRef(null);
 
   useEffect(() => () => pollingRef.current && clearInterval(pollingRef.current), []);
 
@@ -573,71 +572,20 @@ export default function AiEditPanel() {
       v.onerror = () => reject(new Error("영상 로드 실패"));
     });
 
-  // 외부 스크립트 1회 주입
-  const loadScript = (src) =>
-    new Promise((resolve, reject) => {
-      if (document.querySelector(`script[data-src="${src}"]`)) return resolve();
-      const s = document.createElement("script");
-      s.src = src;
-      s.dataset.src = src;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("스크립트 로드 실패: " + src));
-      document.head.appendChild(s);
-    });
-
-  // ffmpeg.wasm 지연 로드 — 번들러 우회를 위해 CDN UMD 로 로드 (단일 스레드, COOP/COEP 불필요)
-  const loadFfmpeg = async () => {
-    if (ffmpegRef.current) return ffmpegRef.current;
-    await loadScript("https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js");
-    await loadScript("https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js");
-    const { FFmpeg } = window.FFmpegWASM;
-    const { toBlobURL, fetchFile } = window.FFmpegUtil;
-    const ff = new FFmpeg();
-    const base = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-    await ff.load({
-      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
-    });
-    ffmpegRef.current = { ff, fetchFile };
-    return ffmpegRef.current;
-  };
-
-  // 원본 영상 위에 음악을 깔아 믹스. 영상 스트림은 copy(회전·화질 보존),
-  // 원본 음성이 있으면 그 아래에 음악을 낮춰서 합성. 결과 mp4 objectURL 반환.
+  // 원본 영상 위에 음악을 깔아 믹스 (서버사이드 ffmpeg). 영상 스트림 copy(회전·화질 보존),
+  // 원본 음성 유지 + 음악 볼륨↓. 결과 mp4 objectURL 반환.
   const muxMusicUnderVideo = async (videoFile, musicUrl) => {
-    const { ff, fetchFile } = await loadFfmpeg();
-    await ff.writeFile("in.mp4", await fetchFile(videoFile));
-    // 음악은 프록시 경유로 받아 CORS 회피
-    await ff.writeFile(
-      "music.wav",
-      await fetchFile(`/api/tools/proxy?url=${encodeURIComponent(musicUrl)}`)
-    );
-
-    // 원본 음성 + 음악(볼륨↓) 믹스. 원본 음성은 normalize=0 으로 그대로 유지.
-    const mixArgs = [
-      "-i", "in.mp4",
-      "-i", "music.wav",
-      "-filter_complex",
-      "[1:a]volume=0.35[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]",
-      "-map", "0:v", "-map", "[a]",
-      "-c:v", "copy", "-shortest", "out.mp4",
-    ];
-    let code = await ff.exec(mixArgs);
-
-    // 원본에 오디오 트랙이 없으면 위 필터 실패 → 음악만 입히기로 폴백
-    if (code !== 0) {
-      const musicOnly = [
-        "-i", "in.mp4",
-        "-i", "music.wav",
-        "-map", "0:v", "-map", "1:a",
-        "-c:v", "copy", "-shortest", "out.mp4",
-      ];
-      code = await ff.exec(musicOnly);
-      if (code !== 0) throw new Error("영상 믹스 실패 (ffmpeg)");
+    const fd = new FormData();
+    fd.append("video", videoFile);
+    fd.append("music_url", musicUrl);
+    const res = await fetch("/api/tools/mux", { method: "POST", body: fd });
+    if (!res.ok) {
+      let msg = "영상 믹스 실패";
+      try { msg = (await res.json()).error || msg; } catch {}
+      throw new Error(msg);
     }
-
-    const data = await ff.readFile("out.mp4");
-    return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
   };
 
   const handleBgm = async () => {
@@ -694,7 +642,7 @@ export default function AiEditPanel() {
       if (bgmMode === "track") {
         setResult(music);
       } else {
-        setProcNote("영상에 배경음악 믹스 중… (최초 1회 로딩 다소 소요)");
+        setProcNote("영상에 배경음악 믹스 중…");
         const outUrl = await muxMusicUnderVideo(file, music.url);
         setResult({ kind: "video", url: outUrl, transparent: false, blob: true });
       }
@@ -722,7 +670,7 @@ export default function AiEditPanel() {
     }
     try {
       setStatus("polling");
-      setProcNote("영상에 배경음악 믹스 중… (최초 1회 로딩 다소 소요)");
+      setProcNote("영상에 배경음악 믹스 중…");
       const outUrl = await muxMusicUnderVideo(file, track.url);
       setResult({
         kind: "video",
