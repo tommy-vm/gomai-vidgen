@@ -394,11 +394,20 @@ export default function AiEditPanel() {
         if (!res.ok) throw new Error(data.error);
         if (data.status === "completed") {
           clearInterval(pollingRef.current);
-          setResult(data.result);
+          const r = data.result;
+          // 미디어 결과인데 URL이 없으면 = 대상 미검출/생성 실패 → 안내
+          if (["image", "video", "audio"].includes(r?.kind) && !r?.url) {
+            setErrorMsg(
+              "결과를 생성하지 못했습니다. 대상을 찾지 못했을 수 있어요 — 대상어를 바꾸거나(예: 사람·자동차) 다른 파일로 시도해보세요."
+            );
+            setStatus("error");
+            return;
+          }
+          setResult(r);
           setStatus("completed");
           const cfg = runCfgRef.current;
-          if (data.result?.kind === "transcript" && cfg.cutMode === "content") {
-            selectCutsAI(data.result.chunks, cfg.instruction);
+          if (r?.kind === "transcript" && cfg.cutMode === "content") {
+            selectCutsAI(r.chunks, cfg.instruction);
           }
         }
       } catch (err) {
