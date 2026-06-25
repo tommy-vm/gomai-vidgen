@@ -573,13 +573,25 @@ export default function AiEditPanel() {
       v.onerror = () => reject(new Error("영상 로드 실패"));
     });
 
-  // ffmpeg.wasm 지연 로드 (단일 스레드 코어 — COOP/COEP 불필요)
+  // 외부 스크립트 1회 주입
+  const loadScript = (src) =>
+    new Promise((resolve, reject) => {
+      if (document.querySelector(`script[data-src="${src}"]`)) return resolve();
+      const s = document.createElement("script");
+      s.src = src;
+      s.dataset.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("스크립트 로드 실패: " + src));
+      document.head.appendChild(s);
+    });
+
+  // ffmpeg.wasm 지연 로드 — 번들러 우회를 위해 CDN UMD 로 로드 (단일 스레드, COOP/COEP 불필요)
   const loadFfmpeg = async () => {
     if (ffmpegRef.current) return ffmpegRef.current;
-    const [{ FFmpeg }, { toBlobURL, fetchFile }] = await Promise.all([
-      import("@ffmpeg/ffmpeg"),
-      import("@ffmpeg/util"),
-    ]);
+    await loadScript("https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js");
+    await loadScript("https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js");
+    const { FFmpeg } = window.FFmpegWASM;
+    const { toBlobURL, fetchFile } = window.FFmpegUtil;
     const ff = new FFmpeg();
     const base = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
     await ff.load({
