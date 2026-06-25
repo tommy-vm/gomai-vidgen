@@ -54,7 +54,70 @@ const CHECKER =
   "repeating-conic-gradient(#2a2a3a 0% 25%, #1a1a28 0% 50%) 50% / 20px 20px";
 
 // 곰 개발자 연동 가이드 — 기능별 FAL 모델 / 입력 / 출력 / 비고
+// (🆕 = 이번 업데이트 신규 추가 기능, 맨 위에 배치)
 const GUIDE = [
+  {
+    title: "🆕 숏폼 추천 (하이라이트 클립)",
+    items: [
+      {
+        mode: "구간 추천",
+        model: "fal-ai/whisper(segment) + LLM",
+        input:
+          "1) whisper로 문장 단위 자막+타임스탬프 → 2) /api/tools/shortform 에 segments+개수+최대길이 전달",
+        output: "clips:[{start,end,title,caption}] — 추천 클립 리스트",
+      },
+    ],
+    note:
+      "영상을 자르지 않고 추천 구간(초)+제목+자막만 반환. 곰믹스가 좌표로 클립 컷 → 세로 크롭·자막 번인은 곰 측 타임라인에서 처리. (스마트컷 내용기반과 같은 whisper+LLM 엔진)",
+  },
+  {
+    title: "🆕 배경음악 (BGM) — 화면 분위기 매칭, 저작권 프리",
+    items: [
+      {
+        mode: "라이브러리 · 추천",
+        model: "OpenAI vision + Jamendo API",
+        input:
+          "1) 프레임 샘플 → 2) /api/tools/music-prompt 로 무드 태그 → 3) /api/tools/music-library?tags= 로 Jamendo 검색(instrumental)",
+        output: "tracks:[{title,artist,url,license,commercial_safe}] — CC 음악 후보. 끊김 없는 전문 트랙",
+      },
+      {
+        mode: "AI 생성 · 트랙",
+        model: "OpenAI vision + cassetteai/music-generator",
+        input:
+          "1) 프레임 샘플 → 2) music-prompt 로 음악 브리프 → 3) prompt + duration(10~180s)",
+        output: "audio_file.url — WAV 음악 트랙 (작곡 퀄리티 편차 가능)",
+      },
+      {
+        mode: "영상에 믹스",
+        model: "위 음악 + 서버 native ffmpeg (/api/tools/mux)",
+        input:
+          "원본 영상 + 음악 → amix(원본 음성 유지, 음악 volume↓), -c:v copy(영상 스트림 복사)",
+        output: "mp4 — 원본 음성 위에 BGM, 회전·화질 보존",
+      },
+    ],
+    note:
+      "라이브러리(Jamendo)는 JAMENDO_CLIENT_ID 필요(무료). CC 라이선스라 상업적 사용은 CC BY/CC0 위주 + 저작자 표시 필요(응답의 license/attribution 노출). '영상에 믹스'는 서버 native ffmpeg(/api/tools/mux)로 합성: -c:v copy(회전·화질 보존) + amix normalize=0(원본 음성 유지). ⚠️ ffmpeg 바이너리 필요 → Vercel 서버리스 미동작(로컬/자체호스팅 전용). 곰 앱은 동일 ffmpeg 로직 네이티브 구현.",
+  },
+  {
+    title: "🆕 영상 생성 편집 (배경 생성 / 오브젝트 추가·교체)",
+    items: [
+      {
+        mode: "빠른 적용 · 프롬프트형",
+        model: "fal-ai/bernini-r/edit-video",
+        input: "video_url, prompt(한글 입력 OK — 자동 영문 번역: 배경/객체/날씨/카메라각 변경 지시)",
+        output: "video.url — mp4 ($0.08/s @848px, 생성형이라 수 분 소요)",
+      },
+      {
+        mode: "정밀 제어 · 마스크형",
+        model: "fal-ai/wan-vace-14b/inpainting (+ fal-ai/sam-3/image 마스크)",
+        input:
+          "1) 첫 프레임 추출(클라 canvas) → 2) SAM3로 대상 마스크 생성 → 3) video_url + mask_image_url + prompt",
+        output: "video.url — mp4 (마스크 영역만 재생성, 수 분 소요)",
+      },
+    ],
+    note:
+      "생성형(diffusion) 편집이라 원본 픽셀이 그대로 보존되지 않음(인물 디테일 미세 변화 가능). 초당 과금·처리시간 김. VACE는 출력 프레임 수가 고정이라 길이가 원본과 다를 수 있음.",
+  },
   {
     title: "배경 제거 / 컷아웃",
     items: [
@@ -74,8 +137,8 @@ const GUIDE = [
         mode: "대상 지정 · 이미지",
         model: "fal-ai/sam-3/image",
         input:
-          "image_url, apply_mask:true, detection_threshold:0.3, + prompt(영문 개념어) 또는 point_prompts:[{x,y,label}] / box_prompts:[{x_min,y_min,x_max,y_max}]",
-        output: "image.url — PNG(투명)",
+          "image_url, apply_mask:true, detection_threshold:0.3, + prompt(한글 OK·자동 번역) 또는 point_prompts:[{x,y,label}] / box_prompts:[{x_min,y_min,x_max,y_max}]",
+        output: "image.url — PNG(투명). 미검출 시 image:null → UI 안내",
       },
     ],
     note: "영상 대상 지정은 SAM3 video가 mp4(검정 배경)·검출 불안정으로 미채택. 영상은 자동(veed)만 사용.",
@@ -86,7 +149,7 @@ const GUIDE = [
       {
         mode: "이미지",
         model: "fal-ai/bria/background/replace",
-        input: "image_url, prompt(새 배경 설명, 영문 권장)",
+        input: "image_url, prompt(새 배경 설명, 한글 OK·자동 번역)",
         output: "images[0].url",
       },
     ],
@@ -121,68 +184,6 @@ const GUIDE = [
     ],
     note:
       "최종 출력은 컷 리스트 JSON: { unit:'seconds', keep:[[s,e],...], remove:[[s,e],...] }. 곰믹스가 이 좌표를 타임라인에 적용(영상 렌더링은 곰 측).",
-  },
-  {
-    title: "영상 생성 편집 (배경 생성 / 오브젝트 추가·교체)",
-    items: [
-      {
-        mode: "빠른 적용 · 프롬프트형",
-        model: "fal-ai/bernini-r/edit-video",
-        input: "video_url, prompt(영문 권장: 배경/객체/날씨/카메라각 변경 지시)",
-        output: "video.url — mp4 ($0.08/s @848px)",
-      },
-      {
-        mode: "정밀 제어 · 마스크형",
-        model: "fal-ai/wan-vace-14b/inpainting (+ fal-ai/sam-3/image 마스크)",
-        input:
-          "1) 첫 프레임 추출(클라 canvas) → 2) SAM3로 대상 마스크 생성 → 3) video_url + mask_image_url + prompt",
-        output: "video.url — mp4 (마스크 영역만 재생성, 수 분 소요)",
-      },
-    ],
-    note:
-      "생성형(diffusion) 편집이라 원본 픽셀이 그대로 보존되지 않음(인물 디테일 미세 변화 가능). 초당 과금·처리시간 김. VACE는 출력 프레임 수가 고정이라 길이가 원본과 다를 수 있음.",
-  },
-  {
-    title: "배경음악 (BGM) — 화면 분위기 매칭, 저작권 프리",
-    items: [
-      {
-        mode: "라이브러리 · 추천",
-        model: "OpenAI vision + Jamendo API",
-        input:
-          "1) 프레임 샘플 → 2) /api/tools/music-prompt 로 무드 태그 → 3) /api/tools/music-library?tags= 로 Jamendo 검색(instrumental)",
-        output: "tracks:[{title,artist,url,license,commercial_safe}] — CC 음악 후보. 끊김 없는 전문 트랙",
-      },
-      {
-        mode: "AI 생성 · 트랙",
-        model: "OpenAI vision + cassetteai/music-generator",
-        input:
-          "1) 프레임 샘플 → 2) music-prompt 로 음악 브리프 → 3) prompt + duration(10~180s)",
-        output: "audio_file.url — WAV 음악 트랙 (작곡 퀄리티 편차 가능)",
-      },
-      {
-        mode: "영상에 믹스",
-        model: "위 음악 + 서버 native ffmpeg (/api/tools/mux)",
-        input:
-          "원본 영상 + 음악 → amix(원본 음성 유지, 음악 volume↓), -c:v copy(영상 스트림 복사)",
-        output: "mp4 — 원본 음성 위에 BGM, 회전·화질 보존",
-      },
-    ],
-    note:
-      "라이브러리(Jamendo)는 JAMENDO_CLIENT_ID 필요(무료). CC 라이선스라 상업적 사용은 CC BY/CC0 위주 + 저작자 표시 필요(응답의 license/attribution 노출). '영상에 믹스'는 서버 native ffmpeg(/api/tools/mux)로 합성: -c:v copy(회전·화질 보존) + amix normalize=0(원본 음성 유지). ⚠️ ffmpeg 바이너리 필요 → Vercel 서버리스 미동작(로컬/자체호스팅 전용). 곰 앱은 동일 ffmpeg 로직 네이티브 구현.",
-  },
-  {
-    title: "숏폼 추천 (하이라이트 클립)",
-    items: [
-      {
-        mode: "구간 추천",
-        model: "fal-ai/whisper(segment) + LLM",
-        input:
-          "1) whisper로 문장 단위 자막+타임스탬프 → 2) /api/tools/shortform 에 segments+개수+최대길이 전달",
-        output: "clips:[{start,end,title,caption}] — 추천 클립 리스트",
-      },
-    ],
-    note:
-      "영상을 자르지 않고 추천 구간(초)+제목+자막만 반환. 곰믹스가 좌표로 클립 컷 → 세로 크롭·자막 번인은 곰 측 타임라인에서 처리. (스마트컷 내용기반과 같은 whisper+LLM 엔진)",
   },
 ];
 
