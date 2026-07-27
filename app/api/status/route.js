@@ -18,8 +18,8 @@ export async function GET(request) {
     }
 
     const ALLOWED_MODELS = [
-      "fal-ai/kling-video/v2.1/pro/image-to-video",
       "fal-ai/kling-video/v2.6/pro/image-to-video",
+      "fal-ai/kling-video/v2.1/pro/image-to-video",
       "fal-ai/kling-video/v3/pro/image-to-video",
     ];
     const modelId = ALLOWED_MODELS.includes(modelParam)

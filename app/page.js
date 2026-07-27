@@ -22,19 +22,19 @@ const ASPECT_OPTIONS = [
 
 const MODEL_OPTIONS = [
   {
-    value: "fal-ai/kling-video/v2.1/pro/image-to-video",
-    label: "Kling 2.1 Pro",
-    desc: "안정적 · 5초 $0.35",
-  },
-  {
     value: "fal-ai/kling-video/v2.6/pro/image-to-video",
     label: "Kling 2.6 Pro",
-    desc: "최신 · 향상된 퀄리티",
+    desc: "기본 · 단편·네이티브 오디오 · 5초 $0.35",
+  },
+  {
+    value: "fal-ai/kling-video/v2.1/pro/image-to-video",
+    label: "Kling 2.1 Pro",
+    desc: "안정적(구버전) · 5초 $0.49",
   },
   {
     value: "fal-ai/kling-video/v3/pro/image-to-video",
     label: "Kling V3 Pro",
-    desc: "최상위 퀄리티",
+    desc: "최상위 퀄리티 · 5초 $0.56",
   },
 ];
 
